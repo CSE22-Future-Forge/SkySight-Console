@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -18,6 +19,45 @@ from . import theme
 # Every 'Label [field]' row in the control rails shares this label column so the
 # fields line up vertically down the whole rail. Callers should not override it.
 LABEL_W = 124
+
+
+def _fullscreen_icon(expand=True):
+    """A corner-bracket glyph: outward for 'expand', inward for 'restore'."""
+    from PySide6.QtGui import QPixmap
+
+    size = 18
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(QColor(theme.TEXT))
+    pen.setWidthF(1.7)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    painter.setPen(pen)
+    m, ln = 4.0, 5.0
+    far = size - m
+    if expand:
+        painter.drawLine(QPointF(m, m + ln), QPointF(m, m))
+        painter.drawLine(QPointF(m, m), QPointF(m + ln, m))
+        painter.drawLine(QPointF(far - ln, m), QPointF(far, m))
+        painter.drawLine(QPointF(far, m), QPointF(far, m + ln))
+        painter.drawLine(QPointF(m, far - ln), QPointF(m, far))
+        painter.drawLine(QPointF(m, far), QPointF(m + ln, far))
+        painter.drawLine(QPointF(far - ln, far), QPointF(far, far))
+        painter.drawLine(QPointF(far, far), QPointF(far, far - ln))
+    else:
+        painter.drawLine(QPointF(m, m + ln), QPointF(m + ln, m + ln))
+        painter.drawLine(QPointF(m + ln, m + ln), QPointF(m + ln, m))
+        painter.drawLine(QPointF(far, m + ln), QPointF(far - ln, m + ln))
+        painter.drawLine(QPointF(far - ln, m + ln), QPointF(far - ln, m))
+        painter.drawLine(QPointF(m, far - ln), QPointF(m + ln, far - ln))
+        painter.drawLine(QPointF(m + ln, far - ln), QPointF(m + ln, far))
+        painter.drawLine(QPointF(far, far - ln), QPointF(far - ln, far - ln))
+        painter.drawLine(QPointF(far - ln, far - ln), QPointF(far - ln, far))
+    painter.end()
+    return QIcon(pm)
+
 
 
 class Card(QFrame):
@@ -98,6 +138,10 @@ class VideoCanvas(QWidget):
     """Aspect-preserving image surface with an optional status overlay."""
 
     clicked = Signal()
+    #: Click position inside the displayed frame, in frame-pixel coordinates.
+    picked = Signal(float, float)
+    #: The fullscreen/restore button was pressed.
+    focusToggled = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -107,9 +151,35 @@ class VideoCanvas(QWidget):
         self._placeholder_color = theme.TEXT_MUTED
         self._badge = ""
         self._badge_color = theme.TEXT_DIM
+        self._view_rect = None
+        self._view_size = (0, 0)
+        self._focused = False
         self.setMinimumSize(480, 320)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setCursor(Qt.PointingHandCursor)
+
+        self.btn_focus = QToolButton(self)
+        self.btn_focus.setAutoRaise(True)
+        self.btn_focus.setCursor(Qt.PointingHandCursor)
+        self.btn_focus.setIconSize(QSize(18, 18))
+        self.btn_focus.setFixedSize(30, 30)
+        self.btn_focus.setToolTip("Expand view")
+        self.btn_focus.setIcon(_fullscreen_icon(expand=True))
+        self.btn_focus.setStyleSheet(
+            "QToolButton{background:rgba(8,12,17,150);"
+            "border:1px solid rgba(255,255,255,28);border-radius:6px;}"
+            "QToolButton:hover{background:rgba(34,48,64,220);}"
+        )
+        self.btn_focus.clicked.connect(self.focusToggled.emit)
+
+    def set_focus_state(self, focused):
+        self._focused = bool(focused)
+        self.btn_focus.setIcon(_fullscreen_icon(expand=not self._focused))
+        self.btn_focus.setToolTip("Restore view" if self._focused else "Expand view")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.btn_focus.move(self.width() - self.btn_focus.width() - 12, 12)
 
     def set_frame(self, qimage):
         from PySide6.QtGui import QPixmap
@@ -135,6 +205,15 @@ class VideoCanvas(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.clicked.emit()
+            rect = self._view_rect
+            if rect is not None and not rect.isEmpty():
+                point = event.position().toPoint()
+                if rect.contains(point):
+                    iw, ih = self._view_size
+                    if iw and ih:
+                        ix = (point.x() - rect.x()) * iw / rect.width()
+                        iy = (point.y() - rect.y()) * ih / rect.height()
+                        self.picked.emit(float(ix), float(iy))
         super().mouseReleaseEvent(event)
 
     def paintEvent(self, _event):
@@ -148,10 +227,13 @@ class VideoCanvas(QWidget):
             )
             x = (self.width() - scaled.width()) // 2
             y = (self.height() - scaled.height()) // 2
+            self._view_rect = QRect(x, y, scaled.width(), scaled.height())
+            self._view_size = (self._pixmap.width(), self._pixmap.height())
             painter.setPen(QPen(QColor(theme.BORDER_SOFT), 1))
             painter.drawRect(x - 1, y - 1, scaled.width() + 1, scaled.height() + 1)
             painter.drawPixmap(x, y, scaled)
         else:
+            self._view_rect = None
             self._paint_placeholder(painter)
 
         if self._badge:

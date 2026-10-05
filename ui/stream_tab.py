@@ -91,6 +91,9 @@ class StreamTab(QWidget):
 
         self.canvas = VideoCanvas()
         self.canvas.set_badge("")
+        self.canvas.picked.connect(self._on_view_pick)
+        self.canvas.focusToggled.connect(self._toggle_focus)
+        self._focused = False
 
         root = QHBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 12)
@@ -336,6 +339,41 @@ class StreamTab(QWidget):
         self.pipeline.detections = []
         self._refresh_track_table([])
         self._update_capture_button()
+
+    # ------------------------------------------------------- view interaction ---
+    def _view_to_frame(self, x, y):
+        """Map a click on the canvas to detector-frame coordinates.
+
+        The base tab draws the frame one-to-one, so this is the identity; the
+        fusion tab overrides it to undo its composite transform.
+        """
+        return x, y
+
+    def _on_view_pick(self, x, y):
+        """Open the add-people window for the detected person that was clicked."""
+        fx, fy = self._view_to_frame(x, y)
+        hit = None
+        hit_area = None
+        for track in self.tracker.snapshot():
+            if not track.confirmed:
+                continue
+            x1, y1, x2, y2 = track.box
+            if x1 <= fx <= x2 and y1 <= fy <= y2:
+                area = (x2 - x1) * (y2 - y1)
+                if hit is None or area < hit_area:
+                    hit, hit_area = track, area
+        if hit is None:
+            return
+        findings = self.build_findings([hit.track_id])
+        if findings:
+            self.captureRequested.emit(findings)
+
+    def _toggle_focus(self):
+        """Hide the control rail and track table so the video fills the window."""
+        self._focused = not getattr(self, "_focused", False)
+        self.rail_scroll.setVisible(not self._focused)
+        self.track_card.setVisible(not self._focused)
+        self.canvas.set_focus_state(self._focused)
 
     # --------------------------------------------------------- frame cycle ---
     def _consume_frame(self, frame_bgr):

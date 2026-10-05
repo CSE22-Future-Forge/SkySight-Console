@@ -500,6 +500,7 @@ class FusionTab(StreamTab):
             size=(sw, sh),
         )
         sx, sy, ox, oy = self._view_transform(mode, use_rgb, use_thermal, (sw, sh))
+        self._last_view_transform = (sx, sy, ox, oy)
         view = imaging.draw_tracks(view, tracks, scale=(sx, sy), offset=(ox, oy))
         view = imaging.stamp(
             view,
@@ -552,6 +553,13 @@ class FusionTab(StreamTab):
             return s * tw_disp / float(vw or 1), s, ox, oy
         # Overlay blend / RGB only / Difference render the RGB frame one-to-one.
         return 1.0, 1.0, 0.0, 0.0
+
+    def _view_to_frame(self, x, y):
+        """Undo the composite transform so clicks hit the right detector box."""
+        sx, sy, ox, oy = getattr(self, "_last_view_transform", (1.0, 1.0, 0.0, 0.0))
+        if not sx or not sy:
+            return x, y
+        return (x - ox) / sx, (y - oy) / sy
 
     def _status_line(self):
         parts = []
