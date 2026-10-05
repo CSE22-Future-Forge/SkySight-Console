@@ -408,6 +408,14 @@ class DetectionPipeline:
         #: ``_consumed`` to tell a fresh result from a re-read of the old one.
         self._generation = 0
         self._consumed = -1
+        #: Opaque caller value passed alongside a frame and handed back with
+        #: the detections it produced. Callers use it to remember what else
+        #: belongs to that frame — the tab keeps the full-resolution capture
+        #: there so a crop is cut from the same moment its box was measured on.
+        #: Detection trails the display by a frame or two, so without this a
+        #: crop on a moving scene is taken from the wrong moment and the person
+        #: sits outside their own box.
+        self.result_context = None
 
         self._lock = threading.Lock()
         self._event = threading.Event()
@@ -425,6 +433,7 @@ class DetectionPipeline:
         self._consumed = -1
         self.detections = []
         self.inference_ms = 0.0
+        self.result_context = None
 
     # ---------------------------------------------------------------- worker ---
     def _ensure_worker(self):
@@ -443,12 +452,12 @@ class DetectionPipeline:
         if thread is not None and thread.is_alive():
             thread.join(timeout=3.0)
 
-    def _submit(self, frame_bgr):
+    def _submit(self, frame_bgr, context=None):
         self._ensure_worker()
         with self._lock:
             # Latest frame wins: a queued frame the model has not started on is
             # worthless once a newer one exists.
-            self._pending = frame_bgr
+            self._pending = (frame_bgr, context)
         self._event.set()
 
     def _loop(self):
@@ -458,9 +467,12 @@ class DetectionPipeline:
             if not self._running:
                 break
             with self._lock:
-                frame, self._pending = self._pending, None
+                job, self._pending = self._pending, None
                 detector = self.detector
-            if frame is None or detector is None:
+            if job is None or detector is None:
+                continue
+            frame, context = job
+            if frame is None:
                 continue
             t0 = time.perf_counter()
             try:
@@ -477,14 +489,19 @@ class DetectionPipeline:
                 self.detections = dets
                 self.inference_ms = ms
                 self.last_error = ""
+                self.result_context = context
                 self._generation += 1
 
     # ------------------------------------------------------------------ step ---
-    def step(self, frame_bgr, now=None):
+    def step(self, frame_bgr, now=None, context=None):
         """Advance detection + tracking by one frame.
 
         Never blocks on the model: work is submitted at most ``max_fps`` times a
         second and collected when the worker finishes it.
+
+        ``context`` is opaque here. It travels with the frame to the worker and
+        comes back on :attr:`result_context` with the detections it produced,
+        which is how a caller ties a result to the frame it was measured on.
         """
         now = time.monotonic() if now is None else now
         if frame_bgr is None:
@@ -499,7 +516,7 @@ class DetectionPipeline:
         ):
             self._last_submit = now
             if getattr(detector, "runs_off_thread", False):
-                self._submit(frame_bgr)
+                self._submit(frame_bgr, context)
             else:
                 # Effectively instant: run it here and use the result now.
                 t0 = time.perf_counter()
@@ -511,6 +528,7 @@ class DetectionPipeline:
                     self.last_error = str(exc)
                 else:
                     self.inference_ms = (time.perf_counter() - t0) * 1000.0
+                self.result_context = context
                 self._generation += 1
 
         with self._lock:

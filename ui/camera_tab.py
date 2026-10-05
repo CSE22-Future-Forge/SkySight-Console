@@ -50,6 +50,7 @@ class CameraTab(StreamTab):
     def __init__(self, database, parent=None):
         self._last_rgb_bgr = None
         self._pending_bgr = None
+        self._pending_raw = None
         self._source_label = "RGB"
         self.video_path = None
         super().__init__(database, parent)
@@ -198,6 +199,7 @@ class CameraTab(StreamTab):
         self._capture_proc = frame.bgr
         self._capture_raw = frame.crop_bgr
         self._pending_bgr = frame.bgr
+        self._pending_raw = frame.crop_bgr
         if isinstance(frame.camera_id, int):
             self._source_label = f"RGB CAM {frame.camera_id:02d}"
         else:
@@ -211,7 +213,10 @@ class CameraTab(StreamTab):
         # Tone-correct first: the detector is fed the corrected frame, so
         # brightness/contrast/exposure change what the model can find.
         frame_bgr = self._apply_tone(frame_bgr)
-        tracks = self._consume_frame(frame_bgr)
+        # Pair the frame with its full-resolution twin so the crop is cut from
+        # the same moment the boxes are measured on.
+        tracks = self._consume_frame(frame_bgr, context=(frame_bgr, self._pending_raw))
+        self._adopt_detection_context()
 
         # Annotate in a scratch buffer: in-place drawing must never touch the
         # array the detector worker is still reading.

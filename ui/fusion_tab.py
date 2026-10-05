@@ -47,10 +47,17 @@ class FusionTab(StreamTab):
 
     def __init__(self, database, parent=None):
         self._rgb_bgr = None
-        self._raw_rgb = None
         self._thermal_raw = None
-        self._raw_thermal = None
         self._det_frame = None
+        #: Full-resolution captures belonging to the frame a detection ran on —
+        #: what a crop is cut from, so it matches the box coordinates.
+        self._raw_rgb = None
+        self._raw_thermal = None
+        #: Full-resolution captures of the newest frame of each payload. Kept
+        #: separate from the pair above, which lags by a detection; these are
+        #: what gets attached to the next submitted frame.
+        self._latest_raw_rgb = None
+        self._latest_raw_thermal = None
         self._rgb_video_path = None
         self._thermal_video_path = None
 
@@ -288,6 +295,7 @@ class FusionTab(StreamTab):
                 self.btn_thermal.setText("OPEN THERMAL")
             self._thermal_raw = None
             self._raw_thermal = None
+            self._latest_raw_thermal = None
             self.banner.show_message(
                 "No matching <name>_thermal video found next to the RGB clip.",
                 "warn",
@@ -358,6 +366,7 @@ class FusionTab(StreamTab):
                 self.btn_thermal.setText("OPEN THERMAL")
             self._thermal_raw = None
             self._raw_thermal = None
+            self._latest_raw_thermal = None
             self._sync_fusion_controls()
             self._recompose()
         elif not self.thermal.is_running:
@@ -401,13 +410,13 @@ class FusionTab(StreamTab):
     def _on_rgb_frame(self, frame):
         """Payload slot — buffer only; the render clock composes."""
         self._rgb_bgr = frame.bgr
-        self._raw_rgb = frame.crop_bgr
+        self._latest_raw_rgb = frame.crop_bgr
         self._mark_dirty()
 
     def _on_thermal_frame(self, frame):
         """Payload slot — buffer only; the render clock composes."""
         self._thermal_raw = frame.bgr
-        self._raw_thermal = frame.crop_bgr
+        self._latest_raw_thermal = frame.crop_bgr
         self._mark_dirty()
 
     def _render_frame(self):
@@ -441,7 +450,14 @@ class FusionTab(StreamTab):
         rgb_view = self._apply_tone(rgb_bgr)
 
         self._det_frame = rgb_view
-        tracks = self._consume_frame(rgb_view)
+        # Both full-resolution captures travel with the frame so whichever
+        # payload a track is attributed to, its crop comes from the moment the
+        # box was measured on rather than from the newest frame.
+        tracks = self._consume_frame(
+            rgb_view,
+            context=(rgb_view, self._latest_raw_rgb, self._latest_raw_thermal),
+        )
+        self._adopt_detection_context()
         sh, sw = rgb_view.shape[:2]
         mode = self.combo_mode.currentText()
         use_rgb = self.chk_rgb.isChecked() and self.chk_rgb_visible.isChecked()
@@ -483,6 +499,15 @@ class FusionTab(StreamTab):
         self.canvas.set_frame(imaging.to_qimage(view, copy=False))
         self._update_track_table(tracks)
         self._update_infer_chip()
+
+    def _apply_detection_context(self, context):
+        """Fusion context is ``(detection_frame, raw_rgb, raw_thermal)``."""
+        proc, raw_rgb, raw_thermal = context
+        self._det_frame = proc
+        if raw_rgb is not None:
+            self._raw_rgb = raw_rgb
+        if raw_thermal is not None:
+            self._raw_thermal = raw_thermal
 
     def _view_transform(self, mode, use_rgb, use_thermal, view_size):
         """Map detector-frame coords onto the composed view for the current mode.

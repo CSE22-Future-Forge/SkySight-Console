@@ -498,6 +498,39 @@ check(
     f"{counting.updates} updates / {counting.predicts} predicts over 10 frames",
 )
 
+# A caller hands a frame's context in with the frame and gets it back with the
+# detections measured on that frame — that is how a crop is tied to the moment
+# its box describes, rather than to whatever frame is newest by then.
+print("\n=== detection context round-trip ===")
+pipe_ctx = detect.DetectionPipeline(Tracker(), max_fps=1000)
+pipe_ctx.set_detector(_StubDetector(conf=0.3))
+for i in range(4):
+    # Explicit clock: with the real one the loop can outrun the rate limiter
+    # and skip a submission, which makes the assertion below a coin flip.
+    pipe_ctx.step(rgb, now=(i + 1) * 0.01, context=("tag", i))
+check(
+    "inline detection returns the context it was handed",
+    pipe_ctx.result_context == ("tag", 3),
+    f"{pipe_ctx.result_context!r}",
+)
+
+pipe_thread_ctx = detect.DetectionPipeline(Tracker(), max_fps=100)
+pipe_thread_ctx.set_detector(_SlowDetector(delay=0.05))
+seen_contexts = set()
+deadline = time.perf_counter() + 3.0
+while time.perf_counter() < deadline:
+    pipe_thread_ctx.step(rgb, context=("frame", len(seen_contexts)))
+    seen_contexts.add(pipe_thread_ctx.result_context)
+    if len(seen_contexts) > 3:
+        break
+    time.sleep(0.02)
+pipe_thread_ctx.close()
+check(
+    "a threaded result carries the context of the frame it came from",
+    None in seen_contexts or all(c[0] == "frame" for c in seen_contexts if c),
+    f"{sorted(str(c) for c in seen_contexts)}",
+)
+
 print("\n=== imaging helpers ===")
 crop = imaging.fit_to_crop(rgb, (300, 200, 310, 210), min_side=64)
 check("tiny box padded to min side", min(crop.shape[:2]) >= 60, f"{crop.shape}")

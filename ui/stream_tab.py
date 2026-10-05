@@ -548,14 +548,38 @@ class StreamTab(QWidget):
         np.copyto(buf, image)
         return buf
 
-    def _consume_frame(self, frame_bgr):
+    def _consume_frame(self, frame_bgr, context=None):
         """Advance detection + tracking; returns the full track snapshot.
 
         Never blocks: the pipeline submits to its worker and hands back whichever
         tracks are current, so this stays cheap even when the model is slow.
+
+        ``context`` is carried with the frame and returned by the pipeline when
+        the matching result lands; see :meth:`_adopt_detection_context`.
         """
-        self.pipeline.step(frame_bgr)
+        self.pipeline.step(frame_bgr, context=context)
         return self.tracker.snapshot()
+
+    def _adopt_detection_context(self):
+        """Re-point the crop source at the frame the current boxes came from.
+
+        Detection trails the display by a frame or two, so cropping from the
+        newest frame takes pixels from a different moment than the box
+        coordinates describe — on a moving scene the person ends up outside
+        their own box. The pipeline hands back whatever context was sent with
+        the frame each result was measured on.
+        """
+        context = self.pipeline.result_context
+        if context is not None:
+            self._apply_detection_context(context)
+
+    def _apply_detection_context(self, context):
+        """Default: context is ``(detection_frame, full_resolution_frame)``."""
+        proc, raw = context
+        if raw is None:
+            return
+        self._capture_proc = proc
+        self._capture_raw = raw
 
     def _update_stats(self, fps=None, resolution=None):
         if fps is not None:
