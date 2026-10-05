@@ -132,15 +132,18 @@ class UltralyticsDetector(BaseDetector):
         importlib.import_module("qs_yolov8")
 
     def _bundled_weights(self):
-        """Resolve weights next to the app, else the packaged YOLO26 nano."""
+        """Resolve weights in MODEL_DIR or next to the app, else the packaged YOLO26 nano."""
         if self.weights:
             return self.weights
         root = Path(__file__).resolve().parent.parent
         for name in self.WEIGHT_CANDIDATES:
+            in_model = MODEL_DIR / name
+            if in_model.is_file():
+                return str(in_model)
             local = root / name
             if local.is_file():
                 return str(local)
-        return self.WEIGHT_CANDIDATES[0]
+        return str(MODEL_DIR / self.WEIGHT_CANDIDATES[0])
 
     def _ensure_model(self):
         if self._model is not None:

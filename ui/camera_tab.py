@@ -29,7 +29,7 @@ from .widgets import Pill, labeled_row
 class CameraTab(StreamTab):
     #: Pick either model at runtime to compare results side by side. The custom
     #: QS-YOLOv8s runs SAHI-style sliding-window inference (shorter side scaled
-    #: to 768, two 768 px windows); the stock entry runs YOLO26 single-pass.
+    #: to 768, two 768 px windows); YOLO26 runs single-pass.
     DETECTOR_CHOICES = (
         (
             (
@@ -41,10 +41,10 @@ class CameraTab(StreamTab):
                     "imgsz": 768,
                 },
             ),
-            ("YOLO26 (stock)", "ultralytics", {}),
+            ("YOLO26", "ultralytics", {}),
         )
         if detect.CUSTOM_PERSON_WEIGHTS.is_file()
-        else (("YOLO26 (stock)", "ultralytics", {}),)
+        else (("YOLO26", "ultralytics", {}),)
     )
 
     def __init__(self, database, parent=None):
