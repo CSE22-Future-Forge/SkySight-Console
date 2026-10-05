@@ -65,6 +65,30 @@ def thermal_to_bgr(frame, colormap="Inferno"):
     return cv2.applyColorMap(gray, lut)
 
 
+#: One-entry memo for :func:`_thermal_view`.
+_THERMAL_VIEW = {"frame": None, "colormap": None, "view": None}
+
+
+def _thermal_view(frame, colormap):
+    """``thermal_to_bgr`` with a one-entry cache.
+
+    The fusion tab composites on every render tick while a thermal frame only
+    arrives at the payload's own (much lower) rate, so the same frame is
+    colourised repeatedly — and on a non-uint8 payload that also means repeating
+    the percentile normalisation, which is not cheap. Keyed on the frame object
+    itself, which is safe because a new capture is always a new array and
+    holding the reference keeps it alive.
+
+    The result is shared: callers must not draw into it.
+    """
+    cache = _THERMAL_VIEW
+    if cache["frame"] is frame and cache["colormap"] == colormap:
+        return cache["view"]
+    view = thermal_to_bgr(frame, colormap)
+    cache["frame"], cache["colormap"], cache["view"] = frame, colormap, view
+    return view
+
+
 def fit(image, width, height):
     """Resize preserving aspect ratio, centred on a black canvas."""
     if image is None or image.size == 0:
@@ -131,13 +155,13 @@ def fuse(
         return np.zeros((h, w, 3), dtype=np.uint8)
 
     if thermal is not None and rgb is None:
-        return fit(thermal_to_bgr(thermal, colormap), w, h)
+        return fit(_thermal_view(thermal, colormap), w, h)
 
     if rgb is not None and thermal is None:
         return fit(rgb, w, h)
 
     rgb_view = rgb
-    therm_view = thermal_to_bgr(thermal, colormap)
+    therm_view = _thermal_view(thermal, colormap)
     if therm_view.shape[0] != rgb_view.shape[0]:
         scale = rgb_view.shape[0] / therm_view.shape[0]
         therm_view = cv2.resize(
@@ -174,16 +198,20 @@ def _text(img, text, org, scale=0.5, color=(255, 255, 255), thickness=1):
 
 
 def draw_tracks(image, tracks, show_ids=True, show_score=True,
-                scale=1.0, offset=(0.0, 0.0)):
-    """Annotate a frame with current tracks. Returns the same array.
+                scale=1.0, offset=(0.0, 0.0), copy=True):
+    """Annotate a frame with current tracks.
 
     ``scale`` (a scalar or ``(sx, sy)``) and ``offset`` map track boxes from the
     detector's coordinate space onto the composed view, so the fusion tab can
     draw on a resized/letterboxed composite and still line the boxes up.
+
+    ``copy=False`` draws straight into ``image`` and is what the live render
+    path uses, so a frame is not duplicated just to be annotated. Pass your own
+    buffer, not one the detector may still be reading.
     """
     if image is None:
         return image
-    out = image.copy()
+    out = image.copy() if copy else image
     h, w = out.shape[:2]
     thickness = max(1, int(round(min(h, w) / 500)))
     if isinstance(scale, (int, float)):
@@ -222,11 +250,14 @@ def draw_tracks(image, tracks, show_ids=True, show_score=True,
     return out
 
 
-def stamp(image, lines, corner="tl", color=(147, 163, 184)):
-    """Burn a small telemetry block (top-left / top-right) into a frame."""
+def stamp(image, lines, corner="tl", color=(147, 163, 184), copy=True):
+    """Burn a small telemetry block (top-left / top-right) into a frame.
+
+    ``copy=False`` draws into ``image`` directly; see :func:`draw_tracks`.
+    """
     if image is None or not lines:
         return image
-    out = image.copy()
+    out = image.copy() if copy else image
     h, w = out.shape[:2]
     scale = 0.5 if min(h, w) >= 700 else 0.4
     step = int(20 * scale / 0.5)
@@ -285,18 +316,39 @@ def placeholder(w, h, message, sub=None, color=(99, 116, 138)):
     return out
 
 
-def to_qimage(bgr):
-    """numpy BGR -> QImage, copying so Qt owns the buffer."""
+def to_qimage(bgr, copy=True):
+    """numpy BGR -> QImage.
+
+    Uses ``Format_BGR888``, which is byte-for-byte what OpenCV already holds,
+    so the per-frame BGR->RGB conversion is skipped entirely. With ``copy=True``
+    (the default) Qt owns an independent buffer and the caller may reuse
+    ``bgr`` immediately.
+
+    ``copy=False`` returns a QImage that *views* the caller's memory: it is only
+    valid while that array is alive and unmodified. Use it when the image is
+    consumed straight away (``QPixmap.fromImage`` deep-copies), and never hold
+    the result across a frame.
+    """
     from PySide6.QtGui import QImage
 
-    if bgr is None:
+    if bgr is None or getattr(bgr, "size", 0) == 0:
         return QImage()
+    if bgr.dtype != np.uint8:
+        bgr = np.clip(bgr, 0, 255).astype(np.uint8)
     if bgr.ndim == 2:
+        bgr = np.ascontiguousarray(bgr)
         h, w = bgr.shape[:2]
-        return QImage(bgr.data, w, h, w, QImage.Format_Grayscale8).copy()
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    h, w, ch = rgb.shape
-    return QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
+        image = QImage(bgr.data, w, h, w, QImage.Format_Grayscale8)
+    elif bgr.shape[2] == 4:
+        # Format_BGR888 has no alpha channel to map a 4-channel buffer onto.
+        bgr = np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGRA2BGR))
+        h, w, ch = bgr.shape
+        image = QImage(bgr.data, w, h, ch * w, QImage.Format_BGR888)
+    else:
+        bgr = np.ascontiguousarray(bgr)
+        h, w, ch = bgr.shape
+        image = QImage(bgr.data, w, h, ch * w, QImage.Format_BGR888)
+    return image.copy() if copy else image
 
 
 def to_thumb_bytes(bgr, max_side=192):

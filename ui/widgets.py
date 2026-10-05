@@ -146,6 +146,8 @@ class VideoCanvas(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pixmap = None
+        self._scaled = None
+        self._scaled_key = None
         self._placeholder_text = "NO SIGNAL"
         self._placeholder_sub = "Start a feed to begin"
         self._placeholder_color = theme.TEXT_MUTED
@@ -188,7 +190,26 @@ class VideoCanvas(QWidget):
             self._pixmap = None
         else:
             self._pixmap = QPixmap.fromImage(qimage)
+        self._scaled = None
         self.update()
+
+    def _scaled_pixmap(self):
+        """The frame fitted to this widget, rescaled only when it has to be.
+
+        Smooth-scaling a full-size frame on every paint is one of the more
+        expensive things the UI thread does, and the result only changes when
+        the widget size or the frame does — so it is cached on exactly that.
+        """
+        pm = self._pixmap
+        if pm is None or pm.isNull():
+            return None
+        key = (self.width(), self.height(), pm.cacheKey())
+        if self._scaled is None or self._scaled_key != key:
+            self._scaled = pm.scaled(
+                self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+            self._scaled_key = key
+        return self._scaled
 
     def clear(self, text="NO SIGNAL", sub="", color=theme.TEXT_MUTED):
         self._pixmap = None
@@ -221,10 +242,8 @@ class VideoCanvas(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(self.rect(), QColor(theme.BG_DEEP))
 
-        if self._pixmap is not None and not self._pixmap.isNull():
-            scaled = self._pixmap.scaled(
-                self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
+        scaled = self._scaled_pixmap()
+        if scaled is not None:
             x = (self.width() - scaled.width()) // 2
             y = (self.height() - scaled.height()) // 2
             self._view_rect = QRect(x, y, scaled.width(), scaled.height())

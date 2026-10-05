@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -41,8 +42,13 @@ class BaseDetector:
     description = ""
     requires_model = False
     default_source = "rgb"
+    #: True when :meth:`infer` is slow enough that running it on a worker
+    #: thread is worth it (see :class:`DetectionPipeline`). Detectors that are
+    #: effectively instant — and the test stubs — leave this False and are
+    #: called inline, so their results are available on the same frame.
+    runs_off_thread = False
 
-    def __init__(self, conf=0.65, source=None, **_ignored):
+    def __init__(self, conf=0.40, source=None, **_ignored):
         self.conf = float(conf)
         self.source = source or self.default_source
 
@@ -67,6 +73,7 @@ class UltralyticsDetector(BaseDetector):
     description = "YOLO26 person detection — uses CUDA when available"
     requires_model = True
     default_source = "fusion"
+    runs_off_thread = True
 
     #: Checked in order; the first one present next to the app wins.
     WEIGHT_CANDIDATES = (
@@ -79,7 +86,7 @@ class UltralyticsDetector(BaseDetector):
 
     def __init__(
         self,
-        conf=0.65,
+        conf=0.40,
         weights=None,
         device=None,
         source=None,
@@ -365,53 +372,159 @@ for _cls in (UltralyticsDetector,):
 
 
 class DetectionPipeline:
-    """Runs a detector at a capped rate and hands results to the tracker.
+    """Runs a detector on a worker thread and hands results to the tracker.
 
-    Decoupling inference cadence from the render cadence keeps the UI at full
-    frame rate even when the detector is slower than the camera.
+    Inference is rate limited to ``max_fps`` and always runs on the *newest*
+    frame; frames that arrive while a model is busy replace the queued one
+    instead of piling up. The UI thread only ever collects finished results, so
+    a slow model cannot stall rendering, and it never blocks the capture thread.
+
+    The tracker is advanced on every call, but the two cases are different:
+
+    * a new detector result arrived -> :meth:`Tracker.update`, which is the only
+      thing that counts hits and misses;
+    * nothing new -> :meth:`Tracker.predict`, which coasts existing tracks along
+      their velocity so boxes stay smooth and matchable.
+
+    Re-feeding a stale result (what this pipeline used to do) inflated the hit
+    count at display rate and let a track be confirmed without any fresh
+    evidence, so that is deliberately avoided now.
+
+    Detectors that are effectively instant (``runs_off_thread`` False) are still
+    called inline, preserving the original synchronous behaviour for them.
     """
 
     def __init__(self, tracker, max_fps=20.0):
         self.tracker = tracker
         self.max_fps = max_fps
         self.detector = None
-        self.last_run = 0.0
         self.inference_ms = 0.0
+        self.last_error = ""
         self.detections: list[Detection] = []
 
+        self._last_submit = 0.0
+        #: Bumped once per completed detector result. ``step`` compares it to
+        #: ``_consumed`` to tell a fresh result from a re-read of the old one.
+        self._generation = 0
+        self._consumed = -1
+
+        self._lock = threading.Lock()
+        self._event = threading.Event()
+        self._pending = None
+        self._running = False
+        self._thread = None
+
     def set_detector(self, detector):
+        self._stop_worker()
         if self.detector is not None and self.detector is not detector:
             self.detector.close()
         self.detector = detector
-        self.last_run = 0.0
+        self._last_submit = 0.0
+        self._generation = 0
+        self._consumed = -1
+        self.detections = []
+        self.inference_ms = 0.0
 
+    # ---------------------------------------------------------------- worker ---
+    def _ensure_worker(self):
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._loop, name="detect-pipeline", daemon=True
+        )
+        self._thread.start()
+
+    def _stop_worker(self):
+        self._running = False
+        self._event.set()
+        thread, self._thread = self._thread, None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=3.0)
+
+    def _submit(self, frame_bgr):
+        self._ensure_worker()
+        with self._lock:
+            # Latest frame wins: a queued frame the model has not started on is
+            # worthless once a newer one exists.
+            self._pending = frame_bgr
+        self._event.set()
+
+    def _loop(self):
+        while self._running:
+            self._event.wait(timeout=0.25)
+            self._event.clear()
+            if not self._running:
+                break
+            with self._lock:
+                frame, self._pending = self._pending, None
+                detector = self.detector
+            if frame is None or detector is None:
+                continue
+            t0 = time.perf_counter()
+            try:
+                dets = detector.infer(frame)
+            except Exception as exc:  # a model failure must not kill the feed
+                with self._lock:
+                    self.detections = []
+                    self.inference_ms = 0.0
+                    self.last_error = str(exc)
+                    self._generation += 1
+                continue
+            ms = (time.perf_counter() - t0) * 1000.0
+            with self._lock:
+                self.detections = dets
+                self.inference_ms = ms
+                self.last_error = ""
+                self._generation += 1
+
+    # ------------------------------------------------------------------ step ---
     def step(self, frame_bgr, now=None):
-        """Advance detection + tracking by one frame."""
+        """Advance detection + tracking by one frame.
+
+        Never blocks on the model: work is submitted at most ``max_fps`` times a
+        second and collected when the worker finishes it.
+        """
         now = time.monotonic() if now is None else now
         if frame_bgr is None:
             return []
+
         h, w = frame_bgr.shape[:2]
         self.tracker.set_frame_shape((h, w))
 
-        if self.detector is not None and (now - self.last_run) >= (1.0 / max(self.max_fps, 1.0)):
-            self.last_run = now
-            t0 = time.perf_counter()
-            try:
-                self.detections = self.detector.infer(frame_bgr)
-            except Exception as exc:  # a model failure must not kill the feed
-                self.detections = []
-                self.inference_ms = 0.0
-                self.last_error = str(exc)
+        detector = self.detector
+        if detector is not None and (now - self._last_submit) >= (
+            1.0 / max(self.max_fps, 1.0)
+        ):
+            self._last_submit = now
+            if getattr(detector, "runs_off_thread", False):
+                self._submit(frame_bgr)
             else:
-                self.inference_ms = (time.perf_counter() - t0) * 1000.0
-        else:
-            # Reuse the previous detections so the tracker can coast between
-            # inference ticks instead of dropping the target every other frame.
-            self.detections = self.detections or []
+                # Effectively instant: run it here and use the result now.
+                t0 = time.perf_counter()
+                try:
+                    self.detections = detector.infer(frame_bgr)
+                except Exception as exc:
+                    self.detections = []
+                    self.inference_ms = 0.0
+                    self.last_error = str(exc)
+                else:
+                    self.inference_ms = (time.perf_counter() - t0) * 1000.0
+                self._generation += 1
 
-        return self.tracker.update(self.detections)
+        with self._lock:
+            generation = self._generation
+            detections = self.detections
+            inference_ms = self.inference_ms
+
+        if generation != self._consumed:
+            self._consumed = generation
+            self.inference_ms = inference_ms
+            return self.tracker.update(detections, now=now)
+        return self.tracker.predict(now=now)
 
     def close(self):
+        self._stop_worker()
         if self.detector is not None:
             self.detector.close()
             self.detector = None

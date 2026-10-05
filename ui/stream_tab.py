@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -36,6 +36,12 @@ from . import theme
 from .widgets import Banner, Card, Pill, StatChip, VideoCanvas, labeled_row, qt_color
 
 TRACK_COLUMNS = ("ID", "SOURCE", "CONF", "AGE", "STATUS")
+
+# How often the render clock looks for a frame to compose. Frames arriving from
+# the payloads only set a flag; composition happens here. Polling faster than
+# the display refreshes costs nothing (the check is a flag read) and lets the
+# view keep up with whatever rate frames actually arrive at.
+RENDER_INTERVAL_MS = 8
 
 # Content width of the control rail. The rail scrolls vertically rather than
 # being squeezed, so this only has to fit the widest control row.
@@ -89,6 +95,9 @@ class StreamTab(QWidget):
         # Detection frame vs the full-resolution frame crops are taken from.
         self._capture_proc = None
         self._capture_raw = None
+        #: Last values written to each track-table row, so unchanged rows are
+        #: not rewritten (and therefore not repainted) every frame.
+        self._row_cache = []
 
         self.canvas = VideoCanvas()
         self.canvas.set_badge("")
@@ -96,11 +105,27 @@ class StreamTab(QWidget):
         self.canvas.focusToggled.connect(self._toggle_focus)
         self._focused = False
 
+        # Scratch frame the render path annotates in, so box drawing never
+        # writes into the array a detector worker may still be reading.
+        self._render_buf = None
+
         root = QHBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 12)
         root.setSpacing(13)
         root.addWidget(self._build_rail_scroll(), 0)
         root.addWidget(self._build_stage(), 1)
+
+        # The render clock. Payload slots only store a frame and mark the view
+        # dirty; everything expensive happens here, once per tick, no matter how
+        # many payloads delivered. That is what stops the two-payload tab from
+        # composing (and repainting) twice for every RGB frame, and it decouples
+        # display smoothness from the detector's speed entirely.
+        self._dirty = False
+        self._render_timer = QTimer(self)
+        self._render_timer.setTimerType(Qt.PreciseTimer)
+        self._render_timer.setInterval(RENDER_INTERVAL_MS)
+        self._render_timer.timeout.connect(self._render_tick)
+        self._render_timer.start()
 
     # ------------------------------------------------------------ scaffold ---
     def _build_rail_scroll(self):
@@ -233,8 +258,14 @@ class StreamTab(QWidget):
         conf_lay.setSpacing(8)
         self.conf_slider = QSlider(Qt.Horizontal)
         self.conf_slider.setRange(10, 95)
-        self.conf_slider.setValue(65)
-        self.conf_value = QLabel("0.65")
+        # Default sits low deliberately: missing a person is the expensive
+        # error here, and a track now needs two separate genuine detections
+        # before it is confirmed, so weakly-scored blips cannot surface on
+        # their own. The old 0.65 was high enough that the bundled
+        # QS-YOLOv8s model — which scores real people in the 0.1-0.3 band —
+        # reported nothing at all.
+        self.conf_slider.setValue(40)
+        self.conf_value = QLabel("0.40")
         self.conf_value.setFixedWidth(50)
         self.conf_value.setProperty("role", "mono")
         self.conf_slider.valueChanged.connect(self._on_conf_changed)
@@ -338,7 +369,8 @@ class StreamTab(QWidget):
     def clear_tracks(self):
         self.tracker.reset()
         self.pipeline.detections = []
-        self._refresh_track_table([])
+        self._row_cache.clear()
+        self._update_track_table([])
         self._update_capture_button()
 
     # ------------------------------------------------------- view interaction ---
@@ -376,10 +408,48 @@ class StreamTab(QWidget):
         self.track_card.setVisible(not self._focused)
         self.canvas.set_focus_state(self._focused)
 
-    # --------------------------------------------------------- frame cycle ---
+    # --------------------------------------------------------- render clock ---
+    def _mark_dirty(self):
+        """Called by a payload slot: a newer frame is available to compose."""
+        self._dirty = True
+
+    def _render_tick(self):
+        if not self._dirty:
+            return
+        self._dirty = False
+        self._render_frame()
+
+    def _render_frame(self):
+        """Compose and display the newest frame. Implemented by each tab."""
+        raise NotImplementedError
+
+    def _render_buffer_for(self, image):
+        """A reusable copy of ``image`` for the annotation overlays.
+
+        The overlays draw in place now, and ``image`` is often the very array
+        handed to a detector worker, so they get their own buffer instead.
+        """
+        if image is None:
+            return None
+        if image.ndim != 3 or image.shape[2] != 3:
+            # Not the 3-channel BGR the overlays and canvas expect; hand back a
+            # converted copy rather than scribbling on the caller's frame.
+            return np.ascontiguousarray(image[:, :, :3]) if image.ndim == 3 else image
+        h, w = image.shape[:2]
+        buf = self._render_buf
+        if buf is None or buf.shape[0] != h or buf.shape[1] != w:
+            buf = np.empty((h, w, 3), dtype=np.uint8)
+            self._render_buf = buf
+        np.copyto(buf, image)
+        return buf
+
     def _consume_frame(self, frame_bgr):
-        """Run detection + tracking on a frame; returns confirmed tracks."""
-        tracks = self.pipeline.step(frame_bgr)
+        """Advance detection + tracking; returns the full track snapshot.
+
+        Never blocks: the pipeline submits to its worker and hands back whichever
+        tracks are current, so this stays cheap even when the model is slow.
+        """
+        self.pipeline.step(frame_bgr)
         return self.tracker.snapshot()
 
     def _update_stats(self, fps=None, resolution=None):
@@ -393,10 +463,9 @@ class StreamTab(QWidget):
         if detector is None:
             self.chip_infer.set_value("--")
             return
-        # Detectors that run off the UI thread (e.g. the fusion model) report
-        # their own wall-clock time; synchronous detectors leave that at 0 and
-        # rely on the pipeline's own measurement.
-        ms = getattr(detector, "inference_ms", 0.0) or self.pipeline.inference_ms
+        # The pipeline times every backend itself, threaded or not — a detector
+        # no longer needs to report its own wall-clock cost.
+        ms = self.pipeline.inference_ms
         if ms <= 0:
             self.chip_infer.set_value("idle", theme.TEXT_MUTED)
             return
@@ -404,55 +473,89 @@ class StreamTab(QWidget):
         self.chip_infer.set_value(f"{ms:.0f} ms", color)
 
     def _update_track_table(self, tracks):
+        """Refresh the live track table, touching only the cells that changed.
+
+        Rebuilding every row (new items, fonts and colours) on every frame makes
+        Qt re-emit dataChanged for the whole table and repaint it, which is pure
+        overhead when the tracks have not moved. Rows are now reused and compared
+        against what was last written.
+        """
         confirmed = [t for t in tracks if t.confirmed]
         self.chip_tracks.set_value(
             str(len(confirmed)),
             theme.WARN if confirmed else theme.TEXT_MUTED,
         )
 
-        self.track_table.setRowCount(len(tracks))
+        table = self.track_table
+        rows = len(tracks)
+        if table.rowCount() != rows:
+            table.setRowCount(rows)
+            for row in range(rows):
+                for col in range(len(TRACK_COLUMNS)):
+                    if table.item(row, col) is None:
+                        item = QTableWidgetItem()
+                        item.setTextAlignment(Qt.AlignCenter)
+                        table.setItem(row, col, item)
+            del self._row_cache[rows:]
+
+        cache = self._row_cache
         for row, track in enumerate(tracks):
             source_text, source_color = SOURCE_PILL.get(
                 track.source, (track.source.upper(), theme.TEXT_DIM)
             )
-
-            id_item = QTableWidgetItem(f"P-{track.track_id:03d}")
-            id_item.setForeground(Qt.GlobalColor.white)
-            font = id_item.font()
-            font.setBold(True)
-            id_item.setFont(font)
-
-            source_item = QTableWidgetItem(source_text)
-            source_item.setForeground(qt_color(source_color))
-
-            conf_item = QTableWidgetItem(f"{track.score * 100:.0f}%")
-            conf_item.setForeground(
-                qt_color(
-                    theme.OK
-                    if track.score >= 0.6
-                    else (theme.WARN if track.score >= 0.4 else theme.TEXT_MUTED)
-                )
-            )
-
-            age_item = QTableWidgetItem(f"{track.age}")
-            age_item.setForeground(qt_color(theme.TEXT_DIM))
-
             if not track.confirmed:
                 state, state_color = "TENTATIVE", theme.TEXT_MUTED
             elif track.missed > 0:
                 state, state_color = "COASTING", theme.WARN
             else:
                 state, state_color = "TRACKING", theme.OK
-            state_item = QTableWidgetItem(state)
-            state_item.setForeground(qt_color(state_color))
+            conf_color = (
+                theme.OK
+                if track.score >= 0.6
+                else (theme.WARN if track.score >= 0.4 else theme.TEXT_MUTED)
+            )
 
-            for col, item in enumerate(
-                (id_item, source_item, conf_item, age_item, state_item)
-            ):
-                item.setTextAlignment(Qt.AlignCenter)
-                self.track_table.setItem(row, col, item)
+            values = (
+                f"P-{track.track_id:03d}",
+                source_text,
+                f"{track.score * 100:.0f}%",
+                f"{track.age}",
+                state,
+            )
+            colors = (
+                theme.TEXT,
+                source_color,
+                conf_color,
+                theme.TEXT_DIM,
+                state_color,
+            )
+            if row < len(cache) and cache[row] == (values, colors):
+                continue
+            self._write_row(row, values, colors, bold_first=True)
+            if row < len(cache):
+                cache[row] = (values, colors)
+            else:
+                cache.append((values, colors))
 
         self._update_capture_button()
+
+    def _write_row(self, row, values, colors, bold_first=False):
+        table = self.track_table
+        for col, text in enumerate(values):
+            item = table.item(row, col)
+            if item is None:
+                item = QTableWidgetItem()
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row, col, item)
+            if item.text() != text:
+                item.setText(text)
+            if col == 0 and bold_first:
+                font = item.font()
+                if not font.bold():
+                    font.setBold(True)
+                    item.setFont(font)
+            if colors[col] is not None:
+                item.setForeground(qt_color(colors[col]))
 
     # -------------------------------------------------------------- capture ---
     def current_tracks(self):

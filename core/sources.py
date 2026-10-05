@@ -77,10 +77,12 @@ class _CaptureThread(QThread):
             self._is_video = True
         self._running = False
         self._cap = None
-        # Backpressure gate. The capture thread hands over one frame at a time
-        # and waits until the UI has finished processing it. Without this a
-        # video file (read far faster than real time) floods the Qt event queue
-        # and the whole interface stalls.
+        # Backpressure flag. Set means "the UI has taken the previous frame and
+        # can accept another"; while it is clear the capture thread drops frames
+        # instead of emitting them. Dropping keeps the feed current and stops a
+        # video file (which decodes far faster than real time) from flooding the
+        # Qt event queue — but unlike a blocking gate it never ties the camera's
+        # frame rate to how long the UI takes to render.
         self._ready = threading.Event()
         self._ready.set()
 
@@ -157,10 +159,16 @@ class _CaptureThread(QThread):
                     self._ready.wait(1.0)
                 if not self._running:
                     break
-                self._ready.clear()
-                self.frameReady.emit(
-                    Frame(self.source, self.camera_id, frame, fps, index, raw_bgr=raw)
-                )
+                # Backpressure by dropping, never by blocking. If the UI has not
+                # taken the previous frame yet then this one is already staler
+                # than what is on screen, so discard it and stay current.
+                # Blocking here would tie the camera's frame rate to however
+                # long the UI takes to render.
+                if self._ready.is_set():
+                    self._ready.clear()
+                    self.frameReady.emit(
+                        Frame(self.source, self.camera_id, frame, fps, index, raw_bgr=raw)
+                    )
 
                 if frame_interval:
                     next_t += frame_interval
@@ -189,7 +197,7 @@ class _CaptureThread(QThread):
 
     def stop(self):
         self._running = False
-        # Unblock a capture thread parked on the backpressure gate.
+        # Clear the way for anything waiting on the backpressure flag.
         self._ready.set()
 
     def _release(self):
@@ -255,9 +263,12 @@ class StreamManager(QObject):
 
     def _on_frame(self, frame: Frame):
         self._last_frame = frame
-        # This slot runs on the UI thread. The connected tab consumes the frame
-        # synchronously inside this emit, so we can release the capture thread
-        # for the next frame as soon as it returns.
+        # This slot runs on the UI thread. Release the capture thread *before*
+        # handing the frame on: the receiving tab only stores it and marks the
+        # display dirty, so the camera must never be held for rendering work.
+        thread = self._thread
+        if thread is not None:
+            thread.mark_ready()
         self.frameReady.emit(frame)
         self.statsChanged.emit(
             {
@@ -267,9 +278,6 @@ class StreamManager(QObject):
                 "frames": frame.index,
             }
         )
-        thread = self._thread
-        if thread is not None:
-            thread.mark_ready()
 
     def _on_failed(self, message):
         self.failed.emit(message)

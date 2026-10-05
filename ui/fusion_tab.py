@@ -392,22 +392,33 @@ class FusionTab(StreamTab):
         self.pill_mode.set_state(self.combo_mode.currentText().upper(), theme.FUSION_C)
 
     def shutdown(self):
+        self._render_timer.stop()
         self.rgb.close()
         self.thermal.close()
         self.pipeline.close()
 
     # ----------------------------------------------------------- frame cycle ---
     def _on_rgb_frame(self, frame):
+        """Payload slot — buffer only; the render clock composes."""
         self._rgb_bgr = frame.bgr
         self._raw_rgb = frame.crop_bgr
-        self._pipeline_cycle(frame.bgr)
+        self._mark_dirty()
 
     def _on_thermal_frame(self, frame):
+        """Payload slot — buffer only; the render clock composes."""
         self._thermal_raw = frame.bgr
         self._raw_thermal = frame.crop_bgr
-        self._pipeline_cycle(self._rgb_bgr)
+        self._mark_dirty()
 
-    def _pipeline_cycle(self, rgb_bgr):
+    def _render_frame(self):
+        """Compose once per render tick from the newest of both payloads.
+
+        Both payload slots only mark the view dirty, so a frame pair that
+        arrives as two separate signals still produces a single
+        detect + fuse + draw pass — the old per-arrival cycle ran the whole
+        thing twice for every frame, once on the RGB and again on the thermal.
+        """
+        rgb_bgr = self._rgb_bgr
         if rgb_bgr is None and self._thermal_raw is None:
             self._update_track_table([])
             return
@@ -446,15 +457,18 @@ class FusionTab(StreamTab):
         )
         sx, sy, ox, oy = self._view_transform(mode, use_rgb, use_thermal, (sw, sh))
         self._last_view_transform = (sx, sy, ox, oy)
-        view = imaging.draw_tracks(view, tracks, scale=(sx, sy), offset=(ox, oy))
-        view = imaging.stamp(
+        # fuse() always hands back a fresh composite, so the overlays can be
+        # drawn straight into it rather than duplicating the frame twice more.
+        imaging.draw_tracks(view, tracks, scale=(sx, sy), offset=(ox, oy), copy=False)
+        imaging.stamp(
             view,
             [
                 f"{imaging.time_label()}",
                 self._status_line(),
             ],
+            copy=False,
         )
-        self.canvas.set_frame(imaging.to_qimage(view))
+        self.canvas.set_frame(imaging.to_qimage(view, copy=False))
         self._update_track_table(tracks)
         self._update_infer_chip()
 
@@ -612,4 +626,7 @@ class FusionTab(StreamTab):
             else:
                 self.canvas.clear("NO SIGNAL", "Open a payload to begin")
             return
-        self._pipeline_cycle(self._rgb_bgr)
+        # A control change should show immediately rather than waiting for the
+        # next tick, so compose now and leave nothing pending.
+        self._dirty = False
+        self._render_frame()

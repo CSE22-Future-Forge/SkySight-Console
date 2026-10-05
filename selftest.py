@@ -3,6 +3,7 @@
 import os
 import shutil
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -77,6 +78,54 @@ for step in range(4):
 coast = tr4.update([])
 check("coasting track still reported while coasting",
       len(coast) == 1 and coast[0].missed == 1, f"{[(c.track_id, c.missed) for c in coast]}")
+
+print("\n=== tracker motion model ===")
+# A target moving at 350 px/s reported only every ~350 ms (the fused model's
+# cadence) moves about 120 px between results — further than the association
+# gate. Prediction has to bridge that, or the target is re-issued a new id on
+# every pass and never confirms.
+tr_motion = Tracker()
+tr_motion.set_frame_shape((720, 1280))
+ids_seen = set()
+for step in range(180):                      # 3 s at 60 Hz
+    now = step / 60.0
+    x = 200 + 350 * now
+    if step % 21 == 0:                       # a detector result every ~350 ms
+        tr_motion.update([Detection(x, 300, x + 62, 455, score=0.9)], now=now)
+    else:
+        tr_motion.predict(now=now)
+    ids_seen.update(t.track_id for t in tr_motion.tracks)
+track_m = tr_motion.tracks[0] if tr_motion.tracks else None
+check("sparse fast target keeps one identity", len(ids_seen) == 1,
+      f"ids={sorted(ids_seen)}")
+check("velocity is measured from the last observation, not the prediction",
+      track_m is not None and abs(track_m.vx - 350) < 40,
+      f"vx={track_m.vx:.0f} px/s (expected ~350)" if track_m else "no track")
+check("track stays confirmed across the gaps between results",
+      track_m is not None and track_m.confirmed and track_m.missed == 0,
+      f"confirmed={track_m.confirmed} missed={track_m.missed}" if track_m else "no track")
+
+# Coasting must not be mistaken for evidence: only a real detector result may
+# move the hit/miss counters, otherwise a track confirms itself off stale data.
+tr_book = Tracker()
+tr_book.set_frame_shape((720, 1280))
+steady = [Detection(100, 100, 162, 255, score=0.9)]
+first_pass = tr_book.update(steady, now=0.0)
+check("one result is not enough to confirm", len(first_pass) == 0)
+for i in range(30):
+    tr_book.predict(now=0.01 * (i + 1))
+check("predict() leaves hits and misses alone",
+      tr_book.tracks[0].hits == 1 and tr_book.tracks[0].missed == 0,
+      f"hits={tr_book.tracks[0].hits} missed={tr_book.tracks[0].missed}")
+check("a second real result confirms the track", len(tr_book.update(steady, now=0.5)) == 1)
+
+tr_ttl = Tracker()
+tr_ttl.set_frame_shape((720, 1280))
+tr_ttl.update(steady, now=0.0)
+tr_ttl.update(steady, now=0.1)
+tr_ttl.update([], now=5.0)
+check("a track unseen past ttl_s is dropped", len(tr_ttl.tracks) == 0,
+      f"{len(tr_ttl.tracks)} left")
 
 print("\n=== fusion ===")
 rgb = synthetic_scene()
@@ -378,6 +427,83 @@ out_tracks = []
 for i in range(10):
     out_tracks = pipe.step(rgb, now=i * 0.016)
 check("pipeline yields confirmed tracks", len(out_tracks) >= 1, f"{len(out_tracks)}")
+
+print("\n=== detection pipeline threading ===")
+
+
+class _SlowDetector(detect.BaseDetector):
+    """Slow enough that running it inline would visibly stall the UI thread."""
+
+    key = "slow"
+    label = "Slow"
+    runs_off_thread = True
+
+    def __init__(self, conf=0.3, delay=0.25, **_kw):
+        super().__init__(conf)
+        self.delay = delay
+        self.calls = 0
+
+    def infer(self, frame_bgr):
+        self.calls += 1
+        time.sleep(self.delay)
+        return [
+            Detection(300, 200, 400, 560, score=0.9, source=self.source,
+                      label=detect.PERSON_LABEL)
+        ]
+
+
+class _CountingTracker(Tracker):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.updates = 0
+        self.predicts = 0
+
+    def update(self, detections, now=None):
+        self.updates += 1
+        return super().update(detections, now=now)
+
+    def predict(self, now=None):
+        self.predicts += 1
+        return super().predict(now=now)
+
+
+pipe_threaded = detect.DetectionPipeline(Tracker(), max_fps=20)
+slow = _SlowDetector(delay=0.25)
+pipe_threaded.set_detector(slow)
+t0 = time.perf_counter()
+for _ in range(5):
+    pipe_threaded.step(rgb)
+inline_cost = time.perf_counter() - t0
+check(
+    "a 250 ms model does not block step() on the calling thread",
+    inline_cost < 0.1,
+    f"5 calls took {inline_cost * 1000:.1f} ms",
+)
+
+deadline = time.perf_counter() + 3.0
+threaded_tracks = []
+while time.perf_counter() < deadline:
+    threaded_tracks = pipe_threaded.step(rgb)
+    if threaded_tracks:
+        break
+    time.sleep(0.02)
+check(
+    "the worker's results still reach the tracker",
+    len(threaded_tracks) >= 1,
+    f"{len(threaded_tracks)} confirmed after {slow.calls} model calls",
+)
+pipe_threaded.close()
+
+counting = _CountingTracker()
+pipe_stale = detect.DetectionPipeline(counting, max_fps=60)
+pipe_stale.set_detector(_StubDetector(conf=0.3))
+for i in range(10):
+    pipe_stale.step(rgb, now=i * 0.016)
+check(
+    "stale results are not re-fed to the tracker",
+    counting.updates < 10 and counting.predicts > 0,
+    f"{counting.updates} updates / {counting.predicts} predicts over 10 frames",
+)
 
 print("\n=== imaging helpers ===")
 crop = imaging.fit_to_crop(rgb, (300, 200, 310, 210), min_side=64)

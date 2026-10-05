@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from core import detect, imaging
-from core.sources import Frame, StreamManager
+from core.sources import StreamManager
 
 from . import theme
 from .stream_tab import StreamTab
@@ -49,6 +49,8 @@ class CameraTab(StreamTab):
 
     def __init__(self, database, parent=None):
         self._last_rgb_bgr = None
+        self._pending_bgr = None
+        self._source_label = "RGB"
         self.video_path = None
         super().__init__(database, parent)
 
@@ -174,6 +176,7 @@ class CameraTab(StreamTab):
             self.start_feed()
 
     def shutdown(self):
+        self._render_timer.stop()
         self.rgb.close()
         self.pipeline.close()
 
@@ -184,27 +187,43 @@ class CameraTab(StreamTab):
 
     # ----------------------------------------------------------- frame cycle ---
     def _on_frame(self, frame):
+        """Payload slot — buffer the frame; the render clock composes it.
+
+        Deliberately trivial: this runs on the UI thread for every delivered
+        frame, and the capture thread is released the moment it returns.
+        """
         self._last_rgb_bgr = frame.bgr
         # Detection runs on the (possibly downscaled) frame; crops use the
         # full-resolution copy so stored thumbnails keep the original detail.
         self._capture_proc = frame.bgr
         self._capture_raw = frame.crop_bgr
-        tracks = self._consume_frame(frame.bgr)
-
-        view = imaging.draw_tracks(frame.bgr, tracks)
+        self._pending_bgr = frame.bgr
         if isinstance(frame.camera_id, int):
-            source_label = f"RGB CAM {frame.camera_id:02d}"
+            self._source_label = f"RGB CAM {frame.camera_id:02d}"
         else:
-            source_label = f"RGB {Path(str(frame.camera_id)).name}"
-        view = imaging.stamp(
+            self._source_label = f"RGB {Path(str(frame.camera_id)).name}"
+        self._mark_dirty()
+
+    def _render_frame(self):
+        frame_bgr = self._pending_bgr
+        if frame_bgr is None:
+            return
+        tracks = self._consume_frame(frame_bgr)
+
+        # Annotate in a scratch buffer: in-place drawing must never touch the
+        # array the detector worker is still reading.
+        view = self._render_buffer_for(frame_bgr)
+        imaging.draw_tracks(view, tracks, copy=False)
+        imaging.stamp(
             view,
             [
-                source_label,
+                self._source_label,
                 imaging.time_label(),
             ],
             corner="tl",
+            copy=False,
         )
-        self.canvas.set_frame(imaging.to_qimage(view))
+        self.canvas.set_frame(imaging.to_qimage(view, copy=False))
         self._update_track_table(tracks)
 
     def _on_failed(self, message):
@@ -239,13 +258,12 @@ class CameraTab(StreamTab):
             elif not self.rgb.is_running:
                 self.canvas.clear("NO SIGNAL", "Start the feed to begin")
             return
-        self._on_frame(
-            Frame(
-                source="rgb",
-                camera_id=self._active_camera_id(),
-                bgr=self._last_rgb_bgr,
-            )
-        )
+        # Re-render the buffered frame directly instead of routing it through
+        # _on_frame: that would overwrite _capture_raw (the full-resolution crop
+        # source) with the downscaled detection frame.
+        self._pending_bgr = self._last_rgb_bgr
+        self._dirty = False
+        self._render_frame()
 
     def _active_camera_id(self):
         return self.spin_rgb_id.value()
