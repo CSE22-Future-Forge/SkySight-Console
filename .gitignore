@@ -1,0 +1,31 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Runtime operator data (person database, thumbnails, exports)
+data/
+*_db/
+
+# Scratch / test artifacts
+_u_*
+_test_db/
+*.log
+
+# Large sample media (exceeds GitHub's 100 MB file limit; use Git LFS if needed)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
