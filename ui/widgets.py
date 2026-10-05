@@ -353,6 +353,11 @@ class Pill(QLabel):
         super().__init__(text, parent)
         self._color = color
         self.setAlignment(Qt.AlignCenter)
+        # Keep the tag at its natural height. Without this it is stretched to
+        # whatever the tallest row it sits in happens to be — beside a
+        # word-wrapped banner in the header, "ACTIVE" and "DB 3" balloon into
+        # tall rounded rectangles instead of staying compact tags.
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self._restyle()
 
     def set_state(self, text, color):

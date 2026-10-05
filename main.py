@@ -93,7 +93,7 @@ class MainWindow(QMainWindow):
 
         dot = StatusDot(theme.OK, 10)
         self.header_dot = dot
-        lay.addWidget(dot)
+        lay.addWidget(dot, 0, Qt.AlignVCenter)
 
         titles = QWidget()
         title_lay = QHBoxLayout(titles)
@@ -105,15 +105,15 @@ class MainWindow(QMainWindow):
         subtitle = QLabel(theme.APP_SUBTITLE)
         subtitle.setProperty("role", "subtitle")
         title_lay.addWidget(subtitle)
-        lay.addWidget(titles)
+        lay.addWidget(titles, 0, Qt.AlignVCenter)
         lay.addStretch(1)
 
         self.pill_mode = Pill("READY", theme.OK)
-        lay.addWidget(self.pill_mode)
+        lay.addWidget(self.pill_mode, 0, Qt.AlignVCenter)
 
         self.pill_db = Pill("DB 0", theme.FUSION_C)
         self.pill_db.setToolTip("People currently filed in the person database.")
-        lay.addWidget(self.pill_db)
+        lay.addWidget(self.pill_db, 0, Qt.AlignVCenter)
 
         self.banner = Banner("")
         self.banner.setMaximumWidth(430)
