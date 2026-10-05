@@ -196,8 +196,8 @@ def _has_ultralytics():
 
 
 check(
-    "ultralytics is the only registered detector",
-    detect.available_keys() == ["ultralytics"],
+    "registry exposes exactly ultralytics + fusion",
+    detect.available_keys() == ["ultralytics", "fusion"],
     f"{detect.available_keys()}",
 )
 for _removed in ("simulated", "motion"):
@@ -207,6 +207,22 @@ for _removed in ("simulated", "motion"):
         check(f"{_removed} detector removed", True)
     else:
         check(f"{_removed} detector removed", False, "still registered")
+
+check(
+    "fusion detector is isolated from the RGB custom model",
+    detect.build("fusion").default_source == "fusion",
+)
+
+from core.fusion_detect import FusionModelDetector as _FMD  # noqa: E402
+
+_ff = _FMD()
+check(
+    "fusion available() matches weights + deps",
+    _ff.available() is True,
+    f"available={_ff.available()}",
+)
+check("fusion does not load its model at construction", _ff._fd is None)
+_ff.close()
 
 ultra = detect.build("ultralytics")
 ultra_ok = ultra.available()
@@ -258,7 +274,7 @@ if detect.CUSTOM_PERSON_WEIGHTS.is_file() and ultra_ok:
         "custom weights recognised as custom",
         custom._is_custom(detect.CUSTOM_PERSON_WEIGHTS),
     )
-    check("sliding inference advertised in description", "sliding" in custom.description)
+    check("custom sliding mode enabled", custom.sliced is True)
     custom.infer(np.full((720, 1280, 3), 40, np.uint8))
     check(
         "custom model loads with layers registered dynamically",

@@ -8,7 +8,7 @@ semantic accents: RGB = sky blue, THERMAL = ember orange, FUSION = violet.
 from . import icons as icons_mod
 
 APP_NAME = "SKYSIGHT CONSOLE"
-APP_SUBTITLE = "Human Search & Rescue — UAV"
+APP_SUBTITLE = "Human Search & Rescue"
 
 # ---------------------------------------------------------------- palette ---
 BG = "#0b0f14"
@@ -62,7 +62,7 @@ def stylesheet():
 }}
 
 QWidget {{
-    background: {BG};
+    background: transparent;
     color: {TEXT};
     font-family: "Segoe UI", "Inter", sans-serif;
     font-size: 13px;
@@ -70,6 +70,12 @@ QWidget {{
 
 QMainWindow, QDialog {{
     background: {BG_DEEP};
+}}
+
+/* Only the central column gets the base surface; children stay transparent so
+   labels and plain containers don't paint dark boxes over the cards/rails. */
+QMainWindow > QWidget {{
+    background: {BG};
 }}
 
 QToolTip {{
@@ -307,6 +313,22 @@ QComboBox QAbstractItemView {{
     selection-color: {TEXT};
     outline: none;
     padding: 4px;
+}}
+
+QLineEdit, QTextEdit, QPlainTextEdit {{
+    background: {ELEV};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+    padding: 6px 9px;
+    color: {TEXT};
+    selection-background-color: {FUSION_C};
+    selection-color: #12091f;
+}}
+QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover {{ border-color: #33455a; }}
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{ border-color: {FUSION_C}; }}
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {{
+    background: #141b23;
+    color: #46586b;
 }}
 
 QSpinBox, QDoubleSpinBox {{

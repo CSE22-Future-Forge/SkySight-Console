@@ -34,6 +34,18 @@ from .widgets import Card, Pill, StatChip, hline, labeled_row
 
 
 class FusionTab(StreamTab):
+    #: The fusion-model entry runs the isolated learned pipeline: the fusion
+    #: network combines the RGB and thermal payloads, then the fused-image model
+    #: detects on the result. The YOLO26 entry detects on the composited view.
+    DETECTOR_CHOICES = (
+        (
+            "Fusion Model",
+            "fusion",
+            {"size": (640, 512), "imgsz": 640},
+        ),
+        ("YOLO26", "ultralytics", {}),
+    )
+
     def __init__(self, database, parent=None):
         self._rgb_bgr = None
         self._thermal_raw = None
@@ -457,6 +469,12 @@ class FusionTab(StreamTab):
 
         self._sync_detector_source()
 
+        detector = self.pipeline.detector
+        if detector is not None and hasattr(detector, "set_thermal"):
+            # The learned-fusion detector needs both payloads; the RGB frame is
+            # handed to it via infer(), the thermal frame via this setter.
+            detector.set_thermal(self._thermal_raw)
+
         if rgb_bgr is None:
             rgb_bgr = imaging.thermal_to_bgr(
                 self._thermal_raw, self.combo_colormap.currentText()
@@ -464,16 +482,25 @@ class FusionTab(StreamTab):
 
         self._annotate_temps()
         tracks = self._consume_frame(rgb_bgr)
+        sh, sw = rgb_bgr.shape[:2]
+        mode = self.combo_mode.currentText()
+        use_rgb = self.chk_rgb.isChecked() and self.chk_rgb_visible.isChecked()
+        use_thermal = self.chk_thermal.isChecked()
+        # Compose at the detector frame's own resolution so the track boxes
+        # share that coordinate space; the canvas scales the finished frame to
+        # the widget. (Composing at a fixed size scaled the boxes wrongly.)
         view = imaging.fuse(
             self._rgb_bgr,
             self._thermal_raw,
-            mode=self.combo_mode.currentText(),
+            mode=mode,
             alpha=self.slider_alpha.value() / 100.0,
-            use_rgb=self.chk_rgb.isChecked() and self.chk_rgb_visible.isChecked(),
-            use_thermal=self.chk_thermal.isChecked(),
+            use_rgb=use_rgb,
+            use_thermal=use_thermal,
             colormap=self.combo_colormap.currentText(),
+            size=(sw, sh),
         )
-        view = imaging.draw_tracks(view, tracks)
+        sx, sy, ox, oy = self._view_transform(mode, use_rgb, use_thermal, (sw, sh))
+        view = imaging.draw_tracks(view, tracks, scale=(sx, sy), offset=(ox, oy))
         view = imaging.stamp(
             view,
             [
@@ -484,6 +511,47 @@ class FusionTab(StreamTab):
         self.canvas.set_frame(imaging.to_qimage(view))
         self._update_track_table(tracks)
         self._update_infer_chip()
+
+    def _view_transform(self, mode, use_rgb, use_thermal, view_size):
+        """Map detector-frame coords onto the composed view for the current mode.
+
+        The view is composed at the detector frame's size, so the RGB frame maps
+        one-to-one for the RGB, overlay and difference modes. Thermal-only and
+        side-by-side change the geometry, so their boxes are scaled and offset
+        to land on the right part of the composite.
+        """
+        vw, vh = view_size
+        rgb = self._rgb_bgr
+        thermal = self._thermal_raw
+        rgb_used = rgb if (use_rgb and rgb is not None) else None
+        therm_used = thermal if use_thermal else None
+
+        if rgb_used is None:
+            # The view is the thermal payload alone; boxes are in that space.
+            if therm_used is None:
+                return 1.0, 1.0, 0.0, 0.0
+            th, tw = therm_used.shape[:2]
+            if (tw, th) == (vw, vh):
+                return 1.0, 1.0, 0.0, 0.0
+            s, ox, oy = imaging.fit_scale_offset(tw, th, vw, vh)
+            return s, s, ox, oy
+
+        if therm_used is None:
+            return 1.0, 1.0, 0.0, 0.0
+
+        th, tw = therm_used.shape[:2]
+        # fuse() resizes the thermal layer to the RGB height before composing.
+        tw_disp = tw * (vh / float(th)) if th else tw
+        if mode == "Side by side":
+            s, ox, oy = imaging.fit_scale_offset(vw + tw_disp, vh, vw, vh)
+            return s, s, ox, oy
+        if mode == "Thermal only":
+            # Boxes are in RGB-frame coords; with a shared field of view the RGB
+            # fraction maps onto the thermal display, which is then letterboxed.
+            s, ox, oy = imaging.fit_scale_offset(tw_disp, vh, vw, vh)
+            return s * tw_disp / float(vw or 1), s, ox, oy
+        # Overlay blend / RGB only / Difference render the RGB frame one-to-one.
+        return 1.0, 1.0, 0.0, 0.0
 
     def _status_line(self):
         parts = []

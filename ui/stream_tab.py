@@ -35,7 +35,7 @@ from core.tracker import Tracker
 from . import theme
 from .widgets import Banner, Card, Pill, StatChip, VideoCanvas, labeled_row, qt_color
 
-TRACK_COLUMNS = ("ID", "SOURCE", "CONF", "TEMP", "AGE", "STATUS")
+TRACK_COLUMNS = ("ID", "SOURCE", "CONF", "AGE", "STATUS")
 
 # Content width of the control rail. The rail scrolls vertically rather than
 # being squeezed, so this only has to fit the widest control row.
@@ -139,16 +139,6 @@ class StreamTab(QWidget):
         lay.addWidget(self.action_card)
 
         lay.addStretch(1)
-        self.rail_note = QLabel(
-            "Person detection runs with YOLO26, using the GPU when available."
-        )
-        self.rail_note.setWordWrap(True)
-        # Word-wrapped labels inside the scroll area are measured against a stale
-        # width, so reserve two lines explicitly instead of letting them clip.
-        self.rail_note.setMinimumHeight(34)
-        self.rail_note.setProperty("role", "dim")
-        self.rail_note.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:10px;")
-        lay.addWidget(self.rail_note)
         return rail
 
     def _build_stage(self):
@@ -248,12 +238,6 @@ class StreamTab(QWidget):
         conf_lay.addWidget(self.conf_value)
         card.add(labeled_row("Confidence", conf_row))
 
-        self.detector_note = QLabel("")
-        self.detector_note.setWordWrap(True)
-        self.detector_note.setMinimumHeight(34)
-        self.detector_note.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:10px;")
-        card.add(self.detector_note)
-
     def _populate_track_card(self, card):
         self.btn_select_all = QPushButton("SELECT ALL")
         self.btn_select_all.setProperty("variant", "ghost")
@@ -316,7 +300,6 @@ class StreamTab(QWidget):
             detector = self._build_detector(entry)
         self._detector_label = entry[0]
         self.pipeline.set_detector(detector)
-        self.detector_note.setText(detector.description)
         self._refresh_badge()
 
     def _refresh_badge(self):
@@ -371,7 +354,10 @@ class StreamTab(QWidget):
         if detector is None:
             self.chip_infer.set_value("--")
             return
-        ms = self.pipeline.inference_ms
+        # Detectors that run off the UI thread (e.g. the fusion model) report
+        # their own wall-clock time; synchronous detectors leave that at 0 and
+        # rely on the pipeline's own measurement.
+        ms = getattr(detector, "inference_ms", 0.0) or self.pipeline.inference_ms
         if ms <= 0:
             self.chip_infer.set_value("idle", theme.TEXT_MUTED)
             return
@@ -409,13 +395,6 @@ class StreamTab(QWidget):
                 )
             )
 
-            temp_item = QTableWidgetItem(
-                f"{track.temp_c:.1f} C" if track.temp_c is not None else "--"
-            )
-            temp_item.setForeground(
-                qt_color(theme.THERMAL_C if track.temp_c is not None else theme.TEXT_MUTED)
-            )
-
             age_item = QTableWidgetItem(f"{track.age}")
             age_item.setForeground(qt_color(theme.TEXT_DIM))
 
@@ -429,7 +408,7 @@ class StreamTab(QWidget):
             state_item.setForeground(qt_color(state_color))
 
             for col, item in enumerate(
-                (id_item, source_item, conf_item, temp_item, age_item, state_item)
+                (id_item, source_item, conf_item, age_item, state_item)
             ):
                 item.setTextAlignment(Qt.AlignCenter)
                 self.track_table.setItem(row, col, item)

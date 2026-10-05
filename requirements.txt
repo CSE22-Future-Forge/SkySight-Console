@@ -2,6 +2,7 @@ PySide6>=6.11.0
 opencv-python>=4.8.0
 numpy>=1.24.0
 ultralytics>=8.4.0
+pillow>=9.0.0
 
 # torch/torchvision are installed separately because the default PyPI wheels for
 # Windows are CPU-only. Install the CUDA build first, then run this file:

@@ -17,21 +17,22 @@ if not exist "%VENV%\Scripts\python.exe" (
     exit /b 1
 )
 
-title SkySight Console
+rem Call the venv's Python directly instead of activating it: activate.bat
+rem hardcodes the original install path, so it breaks when the folder is moved.
+set "PYTHON=%VENV%\Scripts\python.exe"
 
-rem Activate the virtual environment for this session.
-call "%VENV%\Scripts\activate.bat"
+title SkySight Console
 
 echo.
 echo ==========================================
 echo   SkySight Console
-echo   Python: %VENV%\Scripts\python.exe
+echo   Python: %PYTHON%
 echo ==========================================
 echo.
 echo Close the console window to stop the application.
 echo.
 
-python main.py
+"%PYTHON%" main.py
 set "CODE=%ERRORLEVEL%"
 
 if not "%CODE%"=="0" (

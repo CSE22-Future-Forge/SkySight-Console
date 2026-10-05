@@ -104,6 +104,19 @@ def fit(image, width, height):
     return canvas
 
 
+def fit_scale_offset(src_w, src_h, dst_w, dst_h):
+    """Scale + centring offset used by :func:`fit`, for mapping coordinates.
+
+    Returns ``(scale, offset_x, offset_y)`` so a point ``(x, y)`` in the source
+    image maps to ``(x * scale + offset_x, y * scale + offset_y)`` in the
+    destination letterboxed canvas.
+    """
+    if src_w <= 0 or src_h <= 0:
+        return 1.0, 0.0, 0.0
+    scale = min(dst_w / float(src_w), dst_h / float(src_h))
+    return scale, (dst_w - src_w * scale) / 2.0, (dst_h - src_h * scale) / 2.0
+
+
 def letterbox_pair(a, b):
     """Put two images side by side at a common height."""
     if a is None or b is None:
@@ -179,20 +192,35 @@ def fuse(
 
 # --------------------------------------------------------------- overlays ---
 def _text(img, text, org, scale=0.5, color=(255, 255, 255), thickness=1):
-    cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+    # Draw the glyphs only — no black outline/backing behind the text.
     cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
 
 
-def draw_tracks(image, tracks, show_ids=True, show_score=True, show_temp=True):
-    """Annotate a frame with current tracks. Returns the same array."""
+def draw_tracks(image, tracks, show_ids=True, show_score=True, show_temp=True,
+                scale=1.0, offset=(0.0, 0.0)):
+    """Annotate a frame with current tracks. Returns the same array.
+
+    ``scale`` (a scalar or ``(sx, sy)``) and ``offset`` map track boxes from the
+    detector's coordinate space onto the composed view, so the fusion tab can
+    draw on a resized/letterboxed composite and still line the boxes up.
+    """
     if image is None:
         return image
     out = image.copy()
     h, w = out.shape[:2]
     thickness = max(1, int(round(min(h, w) / 500)))
+    if isinstance(scale, (int, float)):
+        sx = sy = float(scale)
+    else:
+        sx, sy = float(scale[0]), float(scale[1])
+    ox, oy = float(offset[0]), float(offset[1])
 
     for t in tracks:
-        x1, y1, x2, y2 = (int(round(v)) for v in t.box)
+        bx1, by1, bx2, by2 = t.box
+        x1 = int(round(bx1 * sx + ox))
+        y1 = int(round(by1 * sy + oy))
+        x2 = int(round(bx2 * sx + ox))
+        y2 = int(round(by2 * sy + oy))
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w - 1, x2), min(h - 1, y2)
         if x2 <= x1 or y2 <= y1:

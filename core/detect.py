@@ -7,6 +7,10 @@ detector by key. The registry ships a single detector:
   It loads the packaged YOLO26 weights by default, or a custom ``.pt`` model
   (with its custom layers registered dynamically) when one is supplied. The
   model is loaded lazily on the first inference.
+
+* ``fusion`` — the isolated RGB + thermal learned-fusion pipeline
+  (infrared fusion + fused-image person detector); see
+  :mod:`core.fusion_detect` and the ``fusion_model/`` package.
 """
 
 from __future__ import annotations
@@ -93,11 +97,6 @@ class UltralyticsDetector(BaseDetector):
         self.sliced = bool(sliced)
         self._model = None
         self.loaded_weights = None
-        if weights is not None and self._is_custom(weights):
-            mode = "sliding windows" if self.sliced else "single-pass"
-            self.description = (
-                f"Custom {Path(str(weights)).name} — QS-YOLOv8s person detection ({mode})"
-            )
 
     def available(self):
         try:

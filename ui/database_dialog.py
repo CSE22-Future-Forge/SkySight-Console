@@ -177,7 +177,7 @@ class DatabaseDialog(QDialog):
         self.detail_image.setAlignment(Qt.AlignCenter)
         self.detail_image.setFixedSize(288, 196)
         self.detail_image.setStyleSheet(
-            f"background:{theme.BG_DEEP};border:1px solid {theme.BORDER_SOFT};"
+            f"background:{theme.PANEL_ALT};border:1px solid {theme.BORDER_SOFT};"
             "border-radius:6px;color:#61748a;font-size:11px;"
         )
         lay.addWidget(self.detail_image)
@@ -194,8 +194,9 @@ class DatabaseDialog(QDialog):
         self.vector_view = QListWidget()
         self.vector_view.setFixedHeight(112)
         self.vector_view.setStyleSheet(
-            f"background:{theme.BG_DEEP};font-family:'Cascadia Mono','Consolas',monospace;"
-            f"font-size:10px;color:{theme.TEXT_MUTED};"
+            f"background:{theme.ELEV};border:1px solid {theme.BORDER_SOFT};"
+            "border-radius:6px;font-family:'Cascadia Mono','Consolas',monospace;"
+            f"font-size:10px;color:{theme.TEXT_MUTED};padding:4px;"
         )
         lay.addWidget(self.vector_view)
         return host
