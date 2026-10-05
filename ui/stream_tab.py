@@ -103,7 +103,11 @@ class StreamTab(QWidget):
         self.canvas.set_badge("")
         self.canvas.picked.connect(self._on_view_pick)
         self.canvas.focusToggled.connect(self._toggle_focus)
+        self.canvas.labelsHiddenChanged.connect(self._on_labels_hidden_changed)
         self._focused = False
+        #: Whether to draw the id / confidence tag above each box. Toggled from
+        #: the tick on the view itself.
+        self._hide_labels = False
 
         # Scratch frame the render path annotates in, so box drawing never
         # writes into the array a detector worker may still be reading.
@@ -409,6 +413,11 @@ class StreamTab(QWidget):
         self.canvas.set_focus_state(self._focused)
 
     # --------------------------------------------------------- render clock ---
+    def _on_labels_hidden_changed(self, hidden):
+        self._hide_labels = bool(hidden)
+        # Repaint what is already on screen rather than waiting for a new frame.
+        self._mark_dirty()
+
     def _mark_dirty(self):
         """Called by a payload slot: a newer frame is available to compose."""
         self._dirty = True

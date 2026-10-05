@@ -213,7 +213,13 @@ class CameraTab(StreamTab):
         # Annotate in a scratch buffer: in-place drawing must never touch the
         # array the detector worker is still reading.
         view = self._render_buffer_for(frame_bgr)
-        imaging.draw_tracks(view, tracks, copy=False)
+        imaging.draw_tracks(
+            view,
+            tracks,
+            show_ids=not self._hide_labels,
+            show_score=not self._hide_labels,
+            copy=False,
+        )
         imaging.stamp(
             view,
             [

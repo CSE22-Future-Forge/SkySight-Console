@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -142,6 +143,8 @@ class VideoCanvas(QWidget):
     picked = Signal(float, float)
     #: The fullscreen/restore button was pressed.
     focusToggled = Signal()
+    #: The in-view "hide labels" tick changed; True means labels are hidden.
+    labelsHiddenChanged = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -174,6 +177,25 @@ class VideoCanvas(QWidget):
         )
         self.btn_focus.clicked.connect(self.focusToggled.emit)
 
+        # Lives on the view rather than in the control rail: it changes what the
+        # picture looks like, not what the system does.
+        self.chk_hide_labels = QCheckBox("Hide labels", self)
+        self.chk_hide_labels.setCursor(Qt.PointingHandCursor)
+        self.chk_hide_labels.setToolTip(
+            "Hide the id / confidence tag drawn above each box."
+        )
+        self.chk_hide_labels.setStyleSheet(
+            "QCheckBox{color:" + theme.TEXT + ";background:rgba(8,12,17,150);"
+            "border:1px solid rgba(255,255,255,28);border-radius:6px;"
+            "padding:3px 8px;font-size:10px;font-weight:600;}"
+            "QCheckBox:hover{background:rgba(34,48,64,220);}"
+            "QCheckBox::indicator{width:11px;height:11px;border-radius:3px;"
+            "border:1px solid rgba(255,255,255,70);background:rgba(0,0,0,60);}"
+            "QCheckBox::indicator:checked{background:" + theme.RGB_C + ";"
+            "border:1px solid " + theme.RGB_C + ";}"
+        )
+        self.chk_hide_labels.toggled.connect(self.labelsHiddenChanged.emit)
+
     def set_focus_state(self, focused):
         self._focused = bool(focused)
         self.btn_focus.setIcon(_fullscreen_icon(expand=not self._focused))
@@ -182,6 +204,10 @@ class VideoCanvas(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.btn_focus.move(self.width() - self.btn_focus.width() - 12, 12)
+        self.chk_hide_labels.adjustSize()
+        self.chk_hide_labels.move(
+            12, self.height() - self.chk_hide_labels.height() - 12
+        )
 
     def set_frame(self, qimage):
         from PySide6.QtGui import QPixmap

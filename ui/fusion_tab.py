@@ -459,7 +459,15 @@ class FusionTab(StreamTab):
         self._last_view_transform = (sx, sy, ox, oy)
         # fuse() always hands back a fresh composite, so the overlays can be
         # drawn straight into it rather than duplicating the frame twice more.
-        imaging.draw_tracks(view, tracks, scale=(sx, sy), offset=(ox, oy), copy=False)
+        imaging.draw_tracks(
+            view,
+            tracks,
+            show_ids=not self._hide_labels,
+            show_score=not self._hide_labels,
+            scale=(sx, sy),
+            offset=(ox, oy),
+            copy=False,
+        )
         imaging.stamp(
             view,
             [
