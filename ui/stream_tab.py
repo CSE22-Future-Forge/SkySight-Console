@@ -258,14 +258,14 @@ class StreamTab(QWidget):
         conf_lay.setSpacing(8)
         self.conf_slider = QSlider(Qt.Horizontal)
         self.conf_slider.setRange(10, 95)
-        # Default sits low deliberately: missing a person is the expensive
-        # error here, and a track now needs two separate genuine detections
-        # before it is confirmed, so weakly-scored blips cannot surface on
-        # their own. The old 0.65 was high enough that the bundled
-        # QS-YOLOv8s model — which scores real people in the 0.1-0.3 band —
-        # reported nothing at all.
-        self.conf_slider.setValue(40)
-        self.conf_value = QLabel("0.40")
+        # Kept at the original 0.65. Dropping this was tried and reverted: it
+        # admits roughly three times as many detections, most of them marginal
+        # boxes sitting on things that are not people, which the tracker then
+        # holds and coasts around. Lower it deliberately — the slider is right
+        # here — when recall matters more than a clean picture, e.g. to make
+        # the bundled QS-YOLOv8s fire at all (it scores people around 0.1-0.3).
+        self.conf_slider.setValue(65)
+        self.conf_value = QLabel("0.65")
         self.conf_value.setFixedWidth(50)
         self.conf_value.setProperty("role", "mono")
         self.conf_slider.valueChanged.connect(self._on_conf_changed)

@@ -4,6 +4,11 @@ numpy>=1.24.0
 ultralytics>=8.4.0
 pillow>=9.0.0
 
+# ByteTrack's assignment solver. ultralytics pulls this in by itself the first
+# time a tracker runs, which is slow and surprising at runtime, so it is pinned
+# here instead.
+lap>=0.5.12
+
 # torch/torchvision are installed separately because the default PyPI wheels for
 # Windows are CPU-only. Install the CUDA build first, then run this file:
 #   pip install torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cu128

@@ -48,7 +48,7 @@ class BaseDetector:
     #: called inline, so their results are available on the same frame.
     runs_off_thread = False
 
-    def __init__(self, conf=0.40, source=None, **_ignored):
+    def __init__(self, conf=0.65, source=None, **_ignored):
         self.conf = float(conf)
         self.source = source or self.default_source
 
@@ -86,7 +86,7 @@ class UltralyticsDetector(BaseDetector):
 
     def __init__(
         self,
-        conf=0.40,
+        conf=0.65,
         weights=None,
         device=None,
         source=None,
@@ -379,12 +379,13 @@ class DetectionPipeline:
     instead of piling up. The UI thread only ever collects finished results, so
     a slow model cannot stall rendering, and it never blocks the capture thread.
 
-    The tracker is advanced on every call, but the two cases are different:
+    The tracker is advanced on every call, but the two cases differ:
 
     * a new detector result arrived -> :meth:`Tracker.update`, which is the only
       thing that counts hits and misses;
-    * nothing new -> :meth:`Tracker.predict`, which coasts existing tracks along
-      their velocity so boxes stay smooth and matchable.
+    * nothing new -> :meth:`Tracker.predict`, which reports the tracks as they
+      stand. Boxes are deliberately *not* extrapolated between results: a box
+      only moves when a detection moves it.
 
     Re-feeding a stale result (what this pipeline used to do) inflated the hit
     count at display rate and let a track be confirmed without any fresh

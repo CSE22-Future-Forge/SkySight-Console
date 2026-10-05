@@ -46,86 +46,79 @@ def synthetic_scene(w=1280, h=720):
     return img
 
 
-print("=== tracker ===")
+print("=== tracker (Ultralytics ByteTrack) ===")
+check("no tracker engine is built until it is used", Tracker()._engine is None)
+
 tr = Tracker()
+tr.set_frame_shape((720, 1280))
+ids_seen = set()
 for step in range(12):
     x = 100 + step * 9
     out = tr.update([Detection(x, 200, x + 70, 400, score=0.8)])
-check("tracker confirms after min_hits", len(out) >= 1, f"{len(out)} confirmed")
+    ids_seen.update(t.track_id for t in out)
+check("a steady target is tracked", len(out) >= 1, f"{len(out)} tracks")
 check(
     "single identity maintained across motion",
-    len(out) == 1 and len(tr.snapshot()) == 1,
-    f"ids={[t.track_id for t in tr.snapshot()]}",
+    len(ids_seen) == 1 and len(tr.snapshot()) == 1,
+    f"ids={sorted(ids_seen)}",
 )
 
 tr2 = Tracker()
+tr2.set_frame_shape((720, 1280))
 two = [Detection(50, 50, 150, 300, 0.7), Detection(700, 60, 790, 310, 0.9)]
-tr2.update(two)
-tr2.update(two)
-tracks2 = tr2.update(two)
+for _ in range(4):
+    tracks2 = tr2.update(two)
 check("two targets -> two tracks", len(tracks2) == 2, f"{len(tracks2)}")
+check(
+    "the two targets hold distinct ids",
+    len({t.track_id for t in tracks2}) == 2,
+    f"ids={sorted(t.track_id for t in tracks2)}",
+)
 
-tr3 = Tracker()
+tr3 = Tracker(max_missed=5)
+tr3.set_frame_shape((720, 1280))
 tr3.update([Detection(10, 10, 100, 200, 0.6)])
-for _ in range(20):
-    empty = tr3.update([])
-check("missed track is dropped past max_missed", len(tr3.snapshot()) == 0)
+for _ in range(10):
+    tr3.update([])
+check("a target that never comes back has its box dropped", len(tr3.snapshot()) == 0,
+      f"{len(tr3.snapshot())} left")
 
+# The earlier revision coasted boxes along a velocity estimate, which drew
+# boxes where no detection existed and read on screen as boxes floating over
+# the scene. A box must only ever move because a detection moved it.
+print("\n=== boxes only move when a detection moves them ===")
 tr4 = Tracker()
-for step in range(4):
-    x = 100 + step * 9
-    tr4.update([Detection(x, 200, x + 70, 400, score=0.8)])
-coast = tr4.update([])
-check("coasting track still reported while coasting",
-      len(coast) == 1 and coast[0].missed == 1, f"{[(c.track_id, c.missed) for c in coast]}")
+tr4.set_frame_shape((720, 1280))
+tr4.update([Detection(100, 100, 170, 260, score=0.9)])
+before = sorted(tuple(t.box) for t in tr4.snapshot())
+for _ in range(20):
+    tr4.predict(now=1.0)
+after = sorted(tuple(t.box) for t in tr4.snapshot())
+check("predict() never moves a box", before == after, f"{before} -> {after}")
 
-print("\n=== tracker motion model ===")
-# A target moving at 350 px/s reported only every ~350 ms (the fused model's
-# cadence) moves about 120 px between results — further than the association
-# gate. Prediction has to bridge that, or the target is re-issued a new id on
-# every pass and never confirms.
-tr_motion = Tracker()
-tr_motion.set_frame_shape((720, 1280))
-ids_seen = set()
-for step in range(180):                      # 3 s at 60 Hz
-    now = step / 60.0
-    x = 200 + 350 * now
-    if step % 21 == 0:                       # a detector result every ~350 ms
-        tr_motion.update([Detection(x, 300, x + 62, 455, score=0.9)], now=now)
-    else:
-        tr_motion.predict(now=now)
-    ids_seen.update(t.track_id for t in tr_motion.tracks)
-track_m = tr_motion.tracks[0] if tr_motion.tracks else None
-check("sparse fast target keeps one identity", len(ids_seen) == 1,
-      f"ids={sorted(ids_seen)}")
-check("velocity is measured from the last observation, not the prediction",
-      track_m is not None and abs(track_m.vx - 350) < 40,
-      f"vx={track_m.vx:.0f} px/s (expected ~350)" if track_m else "no track")
-check("track stays confirmed across the gaps between results",
-      track_m is not None and track_m.confirmed and track_m.missed == 0,
-      f"confirmed={track_m.confirmed} missed={track_m.missed}" if track_m else "no track")
+moved = [Detection(400, 300, 470, 460, score=0.9), Detection(800, 300, 870, 460, score=0.9)]
+tr5 = Tracker()
+tr5.set_frame_shape((720, 1280))
+drawn = tr5.update(moved)
+in_boxes = {tuple(round(v, 2) for v in d.box) for d in moved}
+out_boxes = {tuple(round(v, 2) for v in t.box) for t in drawn}
+check(
+    "every drawn box is exactly a detection box",
+    out_boxes and out_boxes <= in_boxes,
+    f"drawn {sorted(out_boxes)} not among {sorted(in_boxes)}",
+)
 
-# Coasting must not be mistaken for evidence: only a real detector result may
-# move the hit/miss counters, otherwise a track confirms itself off stale data.
-tr_book = Tracker()
-tr_book.set_frame_shape((720, 1280))
-steady = [Detection(100, 100, 162, 255, score=0.9)]
-first_pass = tr_book.update(steady, now=0.0)
-check("one result is not enough to confirm", len(first_pass) == 0)
-for i in range(30):
-    tr_book.predict(now=0.01 * (i + 1))
-check("predict() leaves hits and misses alone",
-      tr_book.tracks[0].hits == 1 and tr_book.tracks[0].missed == 0,
-      f"hits={tr_book.tracks[0].hits} missed={tr_book.tracks[0].missed}")
-check("a second real result confirms the track", len(tr_book.update(steady, now=0.5)) == 1)
-
-tr_ttl = Tracker()
-tr_ttl.set_frame_shape((720, 1280))
-tr_ttl.update(steady, now=0.0)
-tr_ttl.update(steady, now=0.1)
-tr_ttl.update([], now=5.0)
-check("a track unseen past ttl_s is dropped", len(tr_ttl.tracks) == 0,
-      f"{len(tr_ttl.tracks)} left")
+# A track the tracker is still holding onto after it stops being reported
+# keeps its last known box. It is frozen there — never extrapolated onward,
+# which is what used to send boxes off across the scene.
+frozen = sorted(tuple(t.box) for t in tr5.snapshot())
+for _ in range(3):
+    tr5.update([])
+check(
+    "an unreported track keeps its last known box, frozen",
+    sorted(tuple(t.box) for t in tr5.snapshot()) == frozen,
+    f"{sorted(tuple(t.box) for t in tr5.snapshot())} vs {frozen}",
+)
 
 print("\n=== fusion ===")
 rgb = synthetic_scene()
