@@ -77,7 +77,6 @@ class Track:
     hits: int = 1
     missed: int = 0
     confirmed: bool = False
-    temp_c: float | None = None
     label: str = "person"
 
     @property

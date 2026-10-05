@@ -15,7 +15,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -48,11 +47,12 @@ class FusionTab(StreamTab):
 
     def __init__(self, database, parent=None):
         self._rgb_bgr = None
+        self._raw_rgb = None
         self._thermal_raw = None
-        self._simulated_thermal = False
+        self._raw_thermal = None
+        self._det_frame = None
         self._rgb_video_path = None
         self._thermal_video_path = None
-        self._suppress_thermal_autoopen = False
 
         super().__init__(database, parent)
 
@@ -145,30 +145,21 @@ class FusionTab(StreamTab):
         self.chk_thermal.setChecked(True)
         self.chk_thermal.toggled.connect(self._on_thermal_toggle)
 
-        self.chk_sim_thermal = QCheckBox("Simulate thermal from RGB")
-        self.chk_sim_thermal.setChecked(True)
-        self.chk_sim_thermal.setToolTip(
-            "Derive a thermal-like image from the RGB frame so fusion can be "
-            "tested without a radiometric camera."
-        )
-        self.chk_sim_thermal.toggled.connect(self._on_sim_thermal_toggle)
-
         self.spin_thermal_id = QSpinBox()
         self.spin_thermal_id.setRange(0, 20)
         self.spin_thermal_id.setValue(1)
-        self.spin_thermal_id.setEnabled(False)
+        self.spin_thermal_id.setEnabled(True)
 
         therm_box = QLabel()
         therm_box.setStyleSheet(f"color:{theme.THERMAL_C}; font-size:10px;")
         therm_box.setText("LONG-WAVE INFRARED")
         card.add(therm_box)
         card.add(self.chk_thermal)
-        card.add(self.chk_sim_thermal)
         card.add(labeled_row("Camera", self.spin_thermal_id))
 
         self.btn_thermal = QPushButton("OPEN THERMAL")
         self.btn_thermal.setProperty("variant", "ghost")
-        self.btn_thermal.setEnabled(False)
+        self.btn_thermal.setEnabled(True)
         self.btn_thermal.clicked.connect(self.toggle_thermal)
         card.add(self.btn_thermal)
 
@@ -220,29 +211,6 @@ class FusionTab(StreamTab):
         self.combo_colormap.setCurrentText("Inferno")
         self.fusion_card.add(labeled_row("LUT", self.combo_colormap))
 
-        span_row = QWidget()
-        span_lay = QHBoxLayout(span_row)
-        span_lay.setContentsMargins(0, 0, 0, 0)
-        span_lay.setSpacing(6)
-        self.spin_temp_lo = QDoubleSpinBox()
-        self.spin_temp_lo.setRange(-40.0, 200.0)
-        self.spin_temp_lo.setDecimals(0)
-        self.spin_temp_lo.setValue(15.0)
-        self.spin_temp_lo.setSuffix(" C")
-        self.spin_temp_hi = QDoubleSpinBox()
-        self.spin_temp_hi.setRange(-40.0, 200.0)
-        self.spin_temp_hi.setDecimals(0)
-        self.spin_temp_hi.setValue(55.0)
-        self.spin_temp_hi.setSuffix(" C")
-        span_lay.addWidget(self.spin_temp_lo, 1)
-        span_lay.addWidget(self.spin_temp_hi, 1)
-        self.row_span = labeled_row("Temp span", span_row)
-        self.row_span.setToolTip(
-            "Maps 8-bit thermal values onto this estimated range. Radiometric "
-            "calibration replaces this estimate."
-        )
-        self.fusion_card.add(self.row_span)
-
         self.pill_rgb = Pill("RGB OFF", theme.RGB_C)
         self.pill_thermal = Pill("THERMAL", theme.THERMAL_C)
         self.pill_mode = Pill("OVERLAY", theme.FUSION_C)
@@ -291,7 +259,7 @@ class FusionTab(StreamTab):
                 f"RGB: {Path(path).name}  |  Thermal: {thermal.name}"
             )
         else:
-            self.lbl_video.setText(f"RGB: {Path(path).name}  |  Thermal: simulated")
+            self.lbl_video.setText(f"RGB: {Path(path).name}  |  Thermal: none")
         self.banner.hide_message()
 
         # Restart both payloads cleanly for the new clip.
@@ -308,23 +276,20 @@ class FusionTab(StreamTab):
 
         if self._thermal_video_path:
             # Real thermal clip: switch the payload onto it.
-            self._suppress_thermal_autoopen = True
-            self.chk_sim_thermal.setChecked(False)
-            self._suppress_thermal_autoopen = False
-            self._simulated_thermal = False
             if self.thermal.is_running:
                 self.thermal.close()
             self.thermal.open(video_path=self._thermal_video_path)
             self.btn_thermal.setText("CLOSE THERMAL")
             self.banner.show_message("Loaded RGB and matching _thermal video.")
         else:
-            # No thermal clip: keep fusing from an RGB-derived thermal image.
-            self._suppress_thermal_autoopen = True
-            self.chk_sim_thermal.setChecked(True)
-            self._suppress_thermal_autoopen = False
-            self._simulated_thermal = True
+            # No thermal clip: leave the thermal payload with no source.
+            if self.thermal.is_running:
+                self.thermal.close()
+                self.btn_thermal.setText("OPEN THERMAL")
+            self._thermal_raw = None
+            self._raw_thermal = None
             self.banner.show_message(
-                "No matching <name>_thermal video found — simulating thermal from RGB.",
+                "No matching <name>_thermal video found next to the RGB clip.",
                 "warn",
             )
         self._sync_fusion_controls()
@@ -392,28 +357,11 @@ class FusionTab(StreamTab):
                 self.thermal.close()
                 self.btn_thermal.setText("OPEN THERMAL")
             self._thermal_raw = None
+            self._raw_thermal = None
             self._sync_fusion_controls()
             self._recompose()
-        elif not self.chk_sim_thermal.isChecked() and not self.thermal.is_running:
+        elif not self.thermal.is_running:
             self.toggle_thermal()
-
-    def _on_sim_thermal_toggle(self, checked):
-        self._simulated_thermal = checked
-        self.spin_thermal_id.setEnabled(not checked)
-        self.btn_thermal.setEnabled(not checked)
-        if checked:
-            if self.thermal.is_running:
-                self.thermal.close()
-                self.btn_thermal.setText("OPEN THERMAL")
-            self.pill_thermal.set_state("THERM SIM", theme.THERMAL_C)
-        else:
-            self.pill_thermal.set_state("THERMAL", theme.THERMAL_C)
-            # When browse_video drives this change it opens the thermal clip
-            # itself, so don't let the toggle grab the default file underneath.
-            if self.chk_thermal.isChecked() and not self._suppress_thermal_autoopen:
-                self.toggle_thermal()
-        self._sync_fusion_controls()
-        self._recompose()
 
     def _on_alpha_changed(self, value):
         self.label_alpha.setText(f"{value}/{(100 - value):02d}")
@@ -428,7 +376,6 @@ class FusionTab(StreamTab):
         self.row_alpha.setEnabled(rgb_on and therm_on and overlay)
         self.chk_rgb_visible.setEnabled(rgb_on)
         self.combo_colormap.setEnabled(therm_on)
-        self.row_span.setEnabled(therm_on)
 
         if not rgb_on:
             self.pill_rgb.set_state("RGB OFF", theme.TEXT_MUTED)
@@ -439,8 +386,6 @@ class FusionTab(StreamTab):
 
         if not therm_on:
             self.pill_thermal.set_state("THERM OFF", theme.TEXT_MUTED)
-        elif self._simulated_thermal:
-            self.pill_thermal.set_state("THERM SIM", theme.THERMAL_C)
         else:
             self.pill_thermal.set_state("THERMAL", theme.THERMAL_C)
 
@@ -454,12 +399,12 @@ class FusionTab(StreamTab):
     # ----------------------------------------------------------- frame cycle ---
     def _on_rgb_frame(self, frame):
         self._rgb_bgr = frame.bgr
-        if self._simulated_thermal and self._thermal_raw is None:
-            self._thermal_raw = imaging.simulate_thermal(frame.bgr)
+        self._raw_rgb = frame.crop_bgr
         self._pipeline_cycle(frame.bgr)
 
     def _on_thermal_frame(self, frame):
         self._thermal_raw = frame.bgr
+        self._raw_thermal = frame.crop_bgr
         self._pipeline_cycle(self._rgb_bgr)
 
     def _pipeline_cycle(self, rgb_bgr):
@@ -480,7 +425,7 @@ class FusionTab(StreamTab):
                 self._thermal_raw, self.combo_colormap.currentText()
             )
 
-        self._annotate_temps()
+        self._det_frame = rgb_bgr
         tracks = self._consume_frame(rgb_bgr)
         sh, sw = rgb_bgr.shape[:2]
         mode = self.combo_mode.currentText()
@@ -565,7 +510,7 @@ class FusionTab(StreamTab):
         parts = []
         parts.append("RGB ON" if self.chk_rgb.isChecked() else "RGB OFF")
         if self.chk_thermal.isChecked():
-            parts.append("SIM THERM" if self._simulated_thermal else "THERM")
+            parts.append("THERM")
         else:
             parts.append("THERM OFF")
         return "  |  ".join(parts)
@@ -614,37 +559,34 @@ class FusionTab(StreamTab):
 
     def build_findings(self, track_ids=None):
         findings = []
-        rgb = self._rgb_bgr
-        thermal = self._thermal_raw
-        gray_thermal = imaging.normalize_thermal(thermal) if thermal is not None else None
-        lo = self.spin_temp_lo.value()
-        hi = max(self.spin_temp_hi.value(), lo + 1.0)
+        det = self._det_frame
+        raw_rgb = self._raw_rgb if self._raw_rgb is not None else self._rgb_bgr
+        raw_thermal = self._raw_thermal if self._raw_thermal is not None else self._thermal_raw
 
         for track in self.current_tracks():
             if track_ids and track.track_id not in track_ids:
                 continue
 
-            if track.source == "thermal" and gray_thermal is not None:
-                crop = imaging.fit_to_crop(
-                    imaging.thermal_to_bgr(gray_thermal, self.combo_colormap.currentText()),
-                    track.box,
+            if track.source == "thermal" and raw_thermal is not None:
+                # Crop the thermal thumbnail from the full-resolution thermal
+                # frame; the box is scaled up out of the detection frame.
+                box = self._scale_box(track.box, self._raw_scale(det, raw_thermal))
+                base = imaging.thermal_to_bgr(
+                    imaging.normalize_thermal(raw_thermal),
+                    self.combo_colormap.currentText(),
                 )
-                temp = imaging.estimate_temp_c(
-                    imaging.fit_to_crop(gray_thermal, track.box, min_side=8), lo, hi
-                )
+                crop = imaging.fit_to_crop(base, box)
                 source = "thermal"
             else:
-                base = rgb if rgb is not None else imaging.thermal_to_bgr(gray_thermal)
+                base = raw_rgb
+                if base is None and self._thermal_raw is not None:
+                    base = imaging.thermal_to_bgr(
+                        imaging.normalize_thermal(self._thermal_raw)
+                    )
                 if base is None:
                     continue
-                crop = imaging.fit_to_crop(base, track.box)
-                temp = (
-                    imaging.estimate_temp_c(
-                        imaging.fit_to_crop(gray_thermal, track.box, min_side=8), lo, hi
-                    )
-                    if gray_thermal is not None
-                    else None
-                )
+                box = self._scale_box(track.box, self._raw_scale(det, base))
+                crop = imaging.fit_to_crop(base, box)
                 source = track.source
 
             if crop is None:
@@ -655,26 +597,10 @@ class FusionTab(StreamTab):
                     crop_bgr=crop,
                     score=track.score,
                     source=source,
-                    temp_c=temp,
                     camera_id=self._active_camera_id(),
                 )
             )
         return findings
-
-    def _annotate_temps(self):
-        """Attach an estimated temperature to each track from the thermal ROI."""
-        if not self.chk_thermal.isChecked() or self._thermal_raw is None:
-            for track in self.tracker.tracks:
-                track.temp_c = None
-            return
-        gray = imaging.normalize_thermal(self._thermal_raw)
-        if gray is None:
-            return
-        lo = self.spin_temp_lo.value()
-        hi = max(self.spin_temp_hi.value(), lo + 1.0)
-        for track in self.tracker.tracks:
-            roi = imaging.fit_to_crop(gray, track.box, min_side=8)
-            track.temp_c = imaging.estimate_temp_c(roi, lo, hi)
 
     def _recompose(self):
         """Redraw the last known state after a control change with no new frame."""

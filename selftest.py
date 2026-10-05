@@ -80,8 +80,8 @@ check("coasting track still reported while coasting",
 
 print("\n=== fusion ===")
 rgb = synthetic_scene()
-therm = imaging.simulate_thermal(rgb)
-check("simulate_thermal returns 8-bit", therm is not None and therm.dtype == np.uint8)
+therm = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
+check("synthetic thermal is 8-bit single channel", therm.dtype == np.uint8 and therm.ndim == 2)
 
 rgb_only = imaging.fuse(rgb, therm, mode="Overlay blend", alpha=0.5, use_thermal=False, size=(320, 180))
 check("thermal off -> pure rgb", rgb_only.shape == (180, 320, 3))
@@ -109,14 +109,6 @@ check("both off -> blank canvas", none.shape == (100, 200, 3) and none.max() == 
 for name in imaging.COLORMAPS:
     out = imaging.fuse(None, therm, colormap=name, size=(160, 120))
     check(f"colormap {name} renders", out.shape == (120, 160, 3))
-
-print("\n=== temperature mapping ===")
-lo_img = np.full((32, 32), 0, dtype=np.uint8)
-hi_img = np.full((32, 32), 255, dtype=np.uint8)
-t_lo = imaging.estimate_temp_c(lo_img, 15.0, 55.0)
-t_hi = imaging.estimate_temp_c(hi_img, 15.0, 55.0)
-check("cold ROI -> span low", abs(t_lo - 15.0) < 0.6, f"{t_lo}")
-check("hot ROI -> span high", abs(t_hi - 55.0) < 0.6, f"{t_hi}")
 
 print("\n=== features ===")
 
@@ -399,7 +391,7 @@ thumbs = imaging.to_thumb_bytes(person_a)
 check("thumb bytes produced", len(thumbs) > 100, f"{len(thumbs)}B")
 check("thumb decodes", imaging.read_image_bytes(thumbs) is not None)
 
-ann = imaging.draw_tracks(rgb, [type("T", (), {"box": (100, 100, 300, 500), "track_id": 7, "score": 0.9, "source": "fusion", "confirmed": True, "temp_c": 34.5})()])
+ann = imaging.draw_tracks(rgb, [type("T", (), {"box": (100, 100, 300, 500), "track_id": 7, "score": 0.9, "source": "fusion", "confirmed": True})()])
 check("draw_tracks annotates without error", ann.shape == rgb.shape)
 check("draw_tracks does not mutate input", rgb[100, 100].tolist() == img_before if False else True)
 
@@ -412,13 +404,13 @@ db = PersonDatabase(tmp_root)
 check("empty database starts at 0", db.count() == 0)
 check("first id is P-0001", db.next_id() == "P-0001", db.next_id())
 
-p1 = db.add_draft(NewPersonDraft(crop_bgr=person_a, embedding=emb_a, source="rgb", score=0.91, temp_c=36.2, camera_id=0))
+p1 = db.add_draft(NewPersonDraft(crop_bgr=person_a, embedding=emb_a, source="rgb", score=0.91, camera_id=0))
 check("first person filed", p1.person_id == "P-0001")
 check("thumbnail written to disk", os.path.exists(p1.thumb_path(db.thumb_dir)),
       p1.thumb_path(db.thumb_dir))
 check("second id increments", db.next_id() == "P-0002")
 
-p2 = db.add_draft(NewPersonDraft(crop_bgr=person_b, embedding=emb_b, source="thermal", score=0.77, temp_c=33.9, camera_id=1))
+p2 = db.add_draft(NewPersonDraft(crop_bgr=person_b, embedding=emb_b, source="thermal", score=0.77, camera_id=1))
 check("distinct person filed", p2.person_id == "P-0002")
 
 # Query BEFORE filing p3, otherwise the candidate list trivially contains itself.
@@ -430,8 +422,8 @@ check("unrelated person is not flagged",
       all(not m.is_duplicate for m in cands if m.person.person_id == "P-0002"),
       f"{[(m.person.person_id, round(m.score,3)) for m in cands]}")
 
-p3 = db.add_draft(NewPersonDraft(crop_bgr=person_a2, embedding=emb_a2, source="fusion", score=0.88, temp_c=37.1, camera_id=0))
-p4 = db.add_draft(NewPersonDraft(crop_bgr=person_c, embedding=emb_c, source="rgb", score=0.71, temp_c=34.4, camera_id=0))
+p3 = db.add_draft(NewPersonDraft(crop_bgr=person_a2, embedding=emb_a2, source="fusion", score=0.88, camera_id=0))
+p4 = db.add_draft(NewPersonDraft(crop_bgr=person_c, embedding=emb_c, source="rgb", score=0.71, camera_id=0))
 
 report = db.duplicate_report()
 pairs = {(a.person_id, b.person_id) for a, b, _s in report}

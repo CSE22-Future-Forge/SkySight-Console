@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 
 import cv2
@@ -42,7 +42,6 @@ class Capture:
     thumb: str
     source: str = "rgb"
     score: float = 0.0
-    temp_c: float | None = None
     camera_id: int | None = None
     captured_at: str = ""
 
@@ -51,6 +50,11 @@ class Capture:
             return datetime.fromisoformat(self.captured_at).strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
             return self.captured_at
+
+
+#: Keys accepted by :class:`Capture`; legacy fields (e.g. the retired ``temp_c``)
+#: in existing files are ignored on load instead of failing the record.
+_CAPTURE_FIELDS = {f.name for f in fields(Capture)}
 
 
 @dataclass
@@ -69,11 +73,6 @@ class Person:
     @property
     def sources(self):
         return sorted({c.source for c in self.captures})
-
-    @property
-    def best_temp(self):
-        vals = [c.temp_c for c in self.captures if c.temp_c is not None]
-        return max(vals) if vals else None
 
     @property
     def first_seen(self):
@@ -112,7 +111,6 @@ class NewPersonDraft:
     embedding: list
     source: str = "rgb"
     score: float = 0.0
-    temp_c: float | None = None
     camera_id: int | None = None
     track_id: int | None = None
 
@@ -145,7 +143,12 @@ class PersonDatabase:
                     person_id=entry["person_id"],
                     created_at=entry.get("created_at", ""),
                     embedding=[float(v) for v in entry.get("embedding", [])],
-                    captures=[Capture(**c) for c in entry.get("captures", [])],
+                    captures=[
+                        Capture(
+                            **{k: v for k, v in c.items() if k in _CAPTURE_FIELDS}
+                        )
+                        for c in entry.get("captures", [])
+                    ],
                     notes=entry.get("notes", ""),
                     tags=list(entry.get("tags", [])),
                 )
@@ -211,7 +214,6 @@ class PersonDatabase:
                     thumb=thumb_name,
                     source=draft.source,
                     score=round(float(draft.score), 4),
-                    temp_c=draft.temp_c,
                     camera_id=draft.camera_id,
                     captured_at=now,
                 )
@@ -241,7 +243,6 @@ class PersonDatabase:
                 thumb=thumb_name,
                 source=draft.source,
                 score=round(float(draft.score), 4),
-                temp_c=draft.temp_c,
                 camera_id=draft.camera_id,
                 captured_at=datetime.now().isoformat(timespec="seconds"),
             )

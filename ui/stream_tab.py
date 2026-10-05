@@ -55,7 +55,6 @@ class Finding:
     crop_bgr: np.ndarray
     score: float
     source: str
-    temp_c: float | None = None
     camera_id: int | None = None
     confirmed: bool = True
     tentative: bool = False
@@ -66,7 +65,6 @@ class Finding:
             embedding=compute_embedding(self.crop_bgr),
             source=self.source,
             score=self.score,
-            temp_c=self.temp_c,
             camera_id=self.camera_id,
             track_id=self.track_id,
         )
@@ -88,6 +86,9 @@ class StreamTab(QWidget):
         self.tracker = Tracker()
         self.pipeline = detect.DetectionPipeline(self.tracker, max_fps=20.0)
         self._pending_drafts_cache = None
+        # Detection frame vs the full-resolution frame crops are taken from.
+        self._capture_proc = None
+        self._capture_raw = None
 
         self.canvas = VideoCanvas()
         self.canvas.set_badge("")
@@ -478,23 +479,45 @@ class StreamTab(QWidget):
                     continue
         return ids
 
+    @staticmethod
+    def _raw_scale(proc, raw):
+        """Scale from the detector frame to the full-resolution crop frame."""
+        if proc is None or raw is None:
+            return 1.0, 1.0
+        ph, pw = proc.shape[:2]
+        rh, rw = raw.shape[:2]
+        if not pw or not ph:
+            return 1.0, 1.0
+        return rw / float(pw), rh / float(ph)
+
+    @staticmethod
+    def _scale_box(box, scale):
+        sx, sy = scale
+        x1, y1, x2, y2 = box
+        return (x1 * sx, y1 * sy, x2 * sx, y2 * sy)
+
     def build_findings(self, track_ids=None):
-        """Freeze tracks into reviewable findings with crops + features."""
+        """Freeze tracks into reviewable findings with crops + features.
+
+        The crop is taken from the full-resolution source frame, with the track
+        box scaled up from the (possibly capped) detection frame, so the stored
+        thumbnail keeps the original stream's detail.
+        """
         source_image = self._capture_image()
+        scale = self._raw_scale(getattr(self, "_capture_proc", None), source_image)
         findings = []
         for track in self.current_tracks():
             if track_ids and track.track_id not in track_ids:
                 continue
             if source_image is None:
                 continue
-            crop = imaging.fit_to_crop(source_image, track.box)
+            crop = imaging.fit_to_crop(source_image, self._scale_box(track.box, scale))
             findings.append(
                 Finding(
                     track_id=track.track_id,
                     crop_bgr=crop,
                     score=track.score,
                     source=track.source,
-                    temp_c=track.temp_c,
                     camera_id=self._active_camera_id(),
                 )
             )

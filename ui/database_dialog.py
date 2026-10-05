@@ -32,7 +32,7 @@ from core.features import EMBEDDING_DIM, cosine_similarity
 from . import theme
 from .widgets import Banner, Card, Pill, StatChip, qt_color
 
-COLUMNS = ("PERSON ID", "FILED", "CAPTURES", "SOURCES", "PEAK TEMP", "BEST MATCH", "STATUS")
+COLUMNS = ("PERSON ID", "FILED", "CAPTURES", "SOURCES", "BEST MATCH", "STATUS")
 
 
 class DatabaseDialog(QDialog):
@@ -226,13 +226,6 @@ class DatabaseDialog(QDialog):
             src_item.setTextAlignment(Qt.AlignCenter)
             src_item.setForeground(qt_color(theme.FUSION_C))
 
-            temp = person.best_temp
-            temp_item = QTableWidgetItem(f"{temp:.1f} C" if temp is not None else "--")
-            temp_item.setTextAlignment(Qt.AlignCenter)
-            temp_item.setForeground(
-                qt_color(theme.THERMAL_C if temp is not None else theme.TEXT_MUTED)
-            )
-
             if best and best[1] >= self.db.warn_at:
                 best_text = f"{best[0].person_id} ({best[1] * 100:.0f}%)"
                 best_item = QTableWidgetItem(best_text)
@@ -253,9 +246,9 @@ class DatabaseDialog(QDialog):
             status_item.setForeground(qt_color(status_color))
 
             for col, item in enumerate(
-                (id_item, filed_item, cap_item, src_item, temp_item, best_item, status_item)
+                (id_item, filed_item, cap_item, src_item, best_item, status_item)
             ):
-                if col in (1, 3, 4, 5, 6):
+                if col in (1, 3, 4, 5):
                     item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, col, item)
 
@@ -334,8 +327,6 @@ class DatabaseDialog(QDialog):
             f"Filed: {person.first_seen}\n"
             f"Captures: {person.capture_count}\n"
             f"Sources: {', '.join(person.sources) or '--'}\n"
-            f"Peak temp: "
-            f"{f'{person.best_temp:.1f} C' if person.best_temp is not None else '--'}\n"
             f"{best_text}"
         )
 

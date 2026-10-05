@@ -65,29 +65,6 @@ def thermal_to_bgr(frame, colormap="Inferno"):
     return cv2.applyColorMap(gray, lut)
 
 
-def simulate_thermal(rgb_bgr):
-    """Fabricate a plausible thermal image from an RGB frame.
-
-    Lets the whole fusion / thermal-only / temperature path be exercised on a
-    bench with no radiometric camera attached.
-    """
-    if rgb_bgr is None:
-        return None
-    gray = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-    boosted = clahe.apply(gray)
-    blurred = cv2.GaussianBlur(boosted, (0, 0), 3)
-    return cv2.addWeighted(boosted, 0.7, blurred, 0.3, 0)
-
-
-def estimate_temp_c(gray_crop, span_lo, span_hi):
-    """Map an 8-bit thermal ROI onto the operator-configured temperature span."""
-    if gray_crop is None or gray_crop.size == 0:
-        return None
-    mean = float(np.mean(normalize_thermal(gray_crop)))
-    return round(span_lo + (mean / 255.0) * (span_hi - span_lo), 1)
-
-
 def fit(image, width, height):
     """Resize preserving aspect ratio, centred on a black canvas."""
     if image is None or image.size == 0:
@@ -196,7 +173,7 @@ def _text(img, text, org, scale=0.5, color=(255, 255, 255), thickness=1):
     cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
 
 
-def draw_tracks(image, tracks, show_ids=True, show_score=True, show_temp=True,
+def draw_tracks(image, tracks, show_ids=True, show_score=True,
                 scale=1.0, offset=(0.0, 0.0)):
     """Annotate a frame with current tracks. Returns the same array.
 
@@ -238,8 +215,6 @@ def draw_tracks(image, tracks, show_ids=True, show_score=True, show_temp=True,
             label = f"P-{t.track_id:03d}"
             if show_score:
                 label += f" {t.score * 100:3.0f}%"
-            if show_temp and t.temp_c is not None:
-                label += f"  {t.temp_c:.1f}C"
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
             ty = max(th + 6, y1)
             cv2.rectangle(out, (x1, ty - th - 6), (x1 + tw + 10, ty + 2), color, -1)

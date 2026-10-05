@@ -33,6 +33,14 @@ class Frame:
     fps: float = 0.0
     index: int = 0
     wall_time: float = field(default_factory=time.time)
+    #: Original capture frame, before any processing downscale. Detection and
+    #: display use ``bgr``; crops pull from this higher-resolution copy.
+    raw_bgr: np.ndarray | None = None
+
+    @property
+    def crop_bgr(self):
+        """Full-resolution frame for crops (falls back to the processed one)."""
+        return self.raw_bgr if self.raw_bgr is not None else self.bgr
 
     @property
     def size(self):
@@ -131,6 +139,7 @@ class _CaptureThread(QThread):
                         self.failed.emit(f"Camera {self.camera_id} stopped delivering frames.")
                         break
 
+                raw = frame
                 if is_video:
                     frame = self._limit_video_resolution(frame)
 
@@ -149,7 +158,9 @@ class _CaptureThread(QThread):
                 if not self._running:
                     break
                 self._ready.clear()
-                self.frameReady.emit(Frame(self.source, self.camera_id, frame, fps, index))
+                self.frameReady.emit(
+                    Frame(self.source, self.camera_id, frame, fps, index, raw_bgr=raw)
+                )
 
                 if frame_interval:
                     next_t += frame_interval

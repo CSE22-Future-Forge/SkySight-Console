@@ -42,7 +42,7 @@ SOURCE_META = {
 
 
 class CandidateTile(QFrame):
-    """One person in the review grid: crop, identity, score, temp, match hint."""
+    """One person in the review grid: crop, identity, score, match hint."""
 
     def __init__(self, finding, candidates, parent=None):
         super().__init__(parent)
@@ -90,10 +90,6 @@ class CandidateTile(QFrame):
         meta = QHBoxLayout()
         meta.setSpacing(6)
         meta.addWidget(self._meta_chip("CONF", f"{finding.score * 100:.0f}%"))
-        if finding.temp_c is not None:
-            meta.addWidget(
-                self._meta_chip("TEMP", f"{finding.temp_c:.1f} C", theme.THERMAL_C)
-            )
         meta.addStretch(1)
         lay.addLayout(meta)
 

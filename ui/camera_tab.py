@@ -185,6 +185,10 @@ class CameraTab(StreamTab):
     # ----------------------------------------------------------- frame cycle ---
     def _on_frame(self, frame):
         self._last_rgb_bgr = frame.bgr
+        # Detection runs on the (possibly downscaled) frame; crops use the
+        # full-resolution copy so stored thumbnails keep the original detail.
+        self._capture_proc = frame.bgr
+        self._capture_raw = frame.crop_bgr
         tracks = self._consume_frame(frame.bgr)
 
         view = imaging.draw_tracks(frame.bgr, tracks)
@@ -225,7 +229,7 @@ class CameraTab(StreamTab):
 
     # -------------------------------------------------------------- capture ---
     def _capture_image(self):
-        return self._last_rgb_bgr
+        return self._capture_raw if self._capture_raw is not None else self._last_rgb_bgr
 
     def _recompose(self):
         """Redraw from the last buffered frame (used on tab switches)."""
