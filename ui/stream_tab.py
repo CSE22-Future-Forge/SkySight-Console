@@ -99,6 +99,14 @@ class StreamTab(QWidget):
         #: not rewritten (and therefore not repainted) every frame.
         self._row_cache = []
 
+        # Tone controls. Populated while the rail is built, so they must exist
+        # before _build_rail_scroll() runs below.
+        self._tone_sliders = {}
+        self._tone_labels = {}
+        self._tone_defaults = {}
+        self._tone_fmts = {}
+        self._tone_lut = None
+
         self.canvas = VideoCanvas()
         self.canvas.set_badge("")
         self.canvas.picked.connect(self._on_view_pick)
@@ -166,6 +174,10 @@ class StreamTab(QWidget):
         self.detector_card = Card("Detector")
         self._populate_detector_card(self.detector_card)
         lay.addWidget(self.detector_card)
+
+        self.image_card = Card("Image")
+        self._populate_image_card(self.image_card)
+        lay.addWidget(self.image_card)
 
         self.action_card = Card("Operator actions")
         self._populate_action_card(self.action_card)
@@ -276,6 +288,90 @@ class StreamTab(QWidget):
         conf_lay.addWidget(self.conf_slider, 1)
         conf_lay.addWidget(self.conf_value)
         card.add(labeled_row("Confidence", conf_row))
+
+    def _populate_image_card(self, card):
+        """Brightness / contrast / exposure, applied before detection.
+
+        These are not just a display filter — the corrected frame is what the
+        detector is handed, so lifting a dark or flat scene genuinely changes
+        what the model finds in it.
+        """
+        card.add(
+            self._slider_row(
+                card, "Brightness", imaging.TONE_BRIGHTNESS_RANGE, 0, "%+d"
+            )
+        )
+        card.add(
+            self._slider_row(
+                card, "Contrast", imaging.TONE_CONTRAST_RANGE, 100, "%d%%"
+            )
+        )
+        card.add(
+            self._slider_row(
+                card, "Exposure", imaging.TONE_EXPOSURE_RANGE, 100, "%d%%"
+            )
+        )
+
+        self.btn_tone_reset = QPushButton("RESET IMAGE")
+        self.btn_tone_reset.setProperty("variant", "ghost")
+        self.btn_tone_reset.setToolTip("Return brightness, contrast and exposure to default.")
+        self.btn_tone_reset.clicked.connect(self._reset_tone)
+        card.add(self.btn_tone_reset)
+
+    def _slider_row(self, card, label, limits, default, fmt):
+        """One labelled slider with a live readout, wired to the tone LUT."""
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(limits[0], limits[1])
+        slider.setValue(default)
+        value = QLabel(fmt % default)
+        value.setFixedWidth(50)
+        value.setProperty("role", "mono")
+
+        key = label.lower()
+        self._tone_sliders[key] = slider
+        self._tone_labels[key] = value
+        self._tone_defaults[key] = default
+        self._tone_fmts[key] = fmt
+        slider.valueChanged.connect(
+            lambda v, k=key, f=fmt: self._on_tone_changed(k, v, f)
+        )
+
+        lay.addWidget(slider, 1)
+        lay.addWidget(value)
+        return labeled_row(label, row)
+
+    def _on_tone_changed(self, key, value, fmt):
+        self._tone_labels[key].setText(fmt % value)
+        self._rebuild_tone_lut()
+        self._mark_dirty()
+
+    def _reset_tone(self):
+        for key, slider in self._tone_sliders.items():
+            slider.blockSignals(True)
+            slider.setValue(self._tone_defaults[key])
+            slider.blockSignals(False)
+        self._rebuild_tone_lut()
+        for key, slider in self._tone_sliders.items():
+            self._tone_labels[key].setText(self._tone_fmts[key] % slider.value())
+        self._mark_dirty()
+
+    def _rebuild_tone_lut(self):
+        self._tone_lut = imaging.tone_lut(
+            brightness=self._tone_sliders["brightness"].value(),
+            contrast=self._tone_sliders["contrast"].value(),
+            exposure=self._tone_sliders["exposure"].value(),
+        )
+
+    def _apply_tone(self, frame):
+        """Tone-correct a frame on its way to the detector and the display."""
+        if self._tone_lut is None:
+            return frame
+        return imaging.apply_tone(frame, self._tone_lut)
 
     def _populate_track_card(self, card):
         self.btn_select_all = QPushButton("SELECT ALL")

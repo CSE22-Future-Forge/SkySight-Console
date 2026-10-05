@@ -208,6 +208,9 @@ class CameraTab(StreamTab):
         frame_bgr = self._pending_bgr
         if frame_bgr is None:
             return
+        # Tone-correct first: the detector is fed the corrected frame, so
+        # brightness/contrast/exposure change what the model can find.
+        frame_bgr = self._apply_tone(frame_bgr)
         tracks = self._consume_frame(frame_bgr)
 
         # Annotate in a scratch buffer: in-place drawing must never touch the

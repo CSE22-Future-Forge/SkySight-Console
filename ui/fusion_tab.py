@@ -436,9 +436,13 @@ class FusionTab(StreamTab):
                 self._thermal_raw, self.combo_colormap.currentText()
             )
 
-        self._det_frame = rgb_bgr
-        tracks = self._consume_frame(rgb_bgr)
-        sh, sw = rgb_bgr.shape[:2]
+        # Tone-correct the visible layer before it is detected on and composed,
+        # so the controls act on both the model's input and the composite.
+        rgb_view = self._apply_tone(rgb_bgr)
+
+        self._det_frame = rgb_view
+        tracks = self._consume_frame(rgb_view)
+        sh, sw = rgb_view.shape[:2]
         mode = self.combo_mode.currentText()
         use_rgb = self.chk_rgb.isChecked() and self.chk_rgb_visible.isChecked()
         use_thermal = self.chk_thermal.isChecked()
@@ -446,7 +450,7 @@ class FusionTab(StreamTab):
         # share that coordinate space; the canvas scales the finished frame to
         # the widget. (Composing at a fixed size scaled the boxes wrongly.)
         view = imaging.fuse(
-            self._rgb_bgr,
+            rgb_view,
             self._thermal_raw,
             mode=mode,
             alpha=self.slider_alpha.value() / 100.0,

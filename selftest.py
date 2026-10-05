@@ -506,6 +506,26 @@ check("normal box cropped as-is", crop2.shape[:2] == (360, 100), f"{crop2.shape}
 check("crop is a copy not a view", crop2.base is None or crop2.flags["C_CONTIGUOUS"])
 check("fit_to_crop on empty returns None", imaging.fit_to_crop(None, (0, 0, 1, 1)) is None)
 
+print("\n=== tone controls ===")
+check("defaults produce no LUT at all", imaging.tone_lut(0, 100, 100) is None)
+check(
+    "no LUT leaves the frame untouched",
+    imaging.apply_tone(rgb, None) is rgb,
+)
+_lut = imaging.tone_lut(brightness=50)
+check("brightness lifts midtones", int(_lut[128]) > 128, f"128 -> {int(_lut[128])}")
+_lut = imaging.tone_lut(contrast=150)
+check(
+    "contrast widens the range around mid grey",
+    int(_lut[200]) > 200 and int(_lut[55]) < 55,
+    f"55 -> {int(_lut[55])}, 200 -> {int(_lut[200])}",
+)
+_lut = imaging.tone_lut(exposure=150)
+check("exposure applies a linear gain", int(_lut[100]) == 150, f"100 -> {int(_lut[100])}")
+_tone_src = rgb.copy()
+imaging.apply_tone(_tone_src, imaging.tone_lut(brightness=30, contrast=120))
+check("apply_tone never writes into the source frame", np.array_equal(_tone_src, rgb))
+
 thumbs = imaging.to_thumb_bytes(person_a)
 check("thumb bytes produced", len(thumbs) > 100, f"{len(thumbs)}B")
 check("thumb decodes", imaging.read_image_bytes(thumbs) is not None)

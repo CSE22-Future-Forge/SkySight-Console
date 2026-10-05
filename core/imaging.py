@@ -31,6 +31,45 @@ FUSION_MODES = (
 )
 
 
+# ------------------------------------------------------------------- tone ---
+#: Slider ranges for the operator tone controls, in UI units.
+TONE_BRIGHTNESS_RANGE = (-100, 100)     # additive, in 8-bit levels
+TONE_CONTRAST_RANGE = (50, 200)         # percent around mid grey
+TONE_EXPOSURE_RANGE = (50, 200)         # percent linear gain
+
+
+def tone_lut(brightness=0, contrast=100, exposure=100):
+    """Build a 256-entry lookup table for the tone controls.
+
+    Applied in photographic order — exposure (linear gain) first, then contrast
+    pivoted on mid grey, then brightness as an offset — so the three controls
+    behave independently instead of fighting each other.
+
+    Returns ``None`` when every control is at its default, which lets callers
+    skip the work entirely rather than running an identity transform over every
+    frame.
+    """
+    if not brightness and contrast == 100 and exposure == 100:
+        return None
+    x = np.arange(256, dtype=np.float32) / 255.0
+    y = x * (exposure / 100.0)
+    y = (y - 0.5) * (contrast / 100.0) + 0.5
+    y = y + (brightness / 255.0)
+    return np.clip(y * 255.0, 0.0, 255.0).astype(np.uint8)
+
+
+def apply_tone(frame, lut):
+    """Apply a :func:`tone_lut` table. Returns the frame unchanged if no LUT.
+
+    Allocates a new array rather than writing into a reused buffer: the result
+    is handed to a detector running on another thread, so it has to stay valid
+    until that thread is done with it.
+    """
+    if frame is None or lut is None or frame.size == 0:
+        return frame
+    return cv2.LUT(frame, lut)
+
+
 # --------------------------------------------------------------- utilities ---
 def normalize_thermal(frame):
     """Coerce a thermal frame to a usable 8-bit single channel image.
