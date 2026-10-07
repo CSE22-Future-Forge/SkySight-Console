@@ -5,9 +5,10 @@
 The two models are trained separately; this class chains them at inference time
 and reproduces exactly the preprocessing used to build the training data:
 
-  * both images -> grayscale (PIL "L") -> resized to 640x512 (PIL bilinear)
-  * MulFS-CAP fusion at 640x512 (vectorised kernels, numerically identical to
-    the official code)
+  * both images -> grayscale (PIL "L") -> resized preserving aspect ratio so the
+    long side is ``max_side`` (default 640), rounded to a multiple of 16
+  * MulFS-CAP fusion at that size (vectorised kernels, numerically identical to
+    the official code); single pass, no sliding windows / SAHI
   * fused image -> 8-bit -> JPEG q95 round-trip (the detector was trained on
     JPEGs; disable with ``jpeg_roundtrip=False``)
   * QS-YOLOv8 (trained on fused images) at imgsz 640
@@ -49,7 +50,8 @@ class FusionDetector:
         weights_dir=HERE / "weights",
         mulfs_ckpt=None,
         det_weights=None,
-        size=(640, 512),
+        size=None,
+        max_side=640,
         imgsz=640,
         conf=0.25,
         iou=0.7,
@@ -57,8 +59,14 @@ class FusionDetector:
         jpeg_roundtrip=True,
         window_chunk=128,
     ):
-        self.W, self.H = size
-        assert self.W % 16 == 0 and self.H % 16 == 0, "fusion size must be divisible by 16"
+        # ``size`` pins the fusion canvas exactly; otherwise the frames are
+        # scaled (aspect preserved) so the long side is ``max_side``, rounded to
+        # a multiple of 16. No sliding windows / SAHI anywhere in this pipeline.
+        self._fixed = tuple(size) if size else None
+        self.W, self.H = self._fixed if self._fixed else (0, 0)
+        if self._fixed:
+            assert self.W % 16 == 0 and self.H % 16 == 0, "fusion size must be divisible by 16"
+        self.max_side = int(max_side)
         self.imgsz, self.conf, self.iou, self.jpeg = imgsz, conf, iou, jpeg_roundtrip
         self.device = device  # resolved on the first call if None
         self.window_chunk = int(window_chunk)
@@ -123,7 +131,32 @@ class FusionDetector:
         self._loaded = True
 
     # ------------------------------------------------------------------ helpers
-    def _load_gray(self, img):
+    @staticmethod
+    def _image_size(img):
+        """(width, height) of a path / PIL image / numpy frame without resizing."""
+        from PIL import Image
+
+        if isinstance(img, Image.Image):
+            return img.size
+        if isinstance(img, np.ndarray):
+            h, w = img.shape[:2]
+            return w, h
+        with Image.open(img) as im:
+            return im.size
+
+    def _target_size(self, w, h):
+        """Fusion canvas: aspect preserved, long side ``max_side``, multiple of 16."""
+        if self._fixed:
+            return self._fixed
+        long_side = max(int(w), int(h))
+        if long_side <= 0 or self.max_side <= 0:
+            return 640, 512
+        scale = self.max_side / float(long_side)
+        tw = max(16, int(int(w) * scale / 16.0 + 0.5) * 16)
+        th = max(16, int(int(h) * scale / 16.0 + 0.5) * 16)
+        return tw, th
+
+    def _load_gray(self, img, size):
         from PIL import Image
 
         if isinstance(img, Image.Image):
@@ -136,7 +169,7 @@ class FusionDetector:
         else:
             im = Image.open(img)
         orig = im.size
-        g = im.convert("L").resize((self.W, self.H), Image.BILINEAR)
+        g = im.convert("L").resize(size, Image.BILINEAR)
         import torch
 
         t = torch.from_numpy(np.asarray(g, dtype=np.float32) / 255.0)[None, None].to(self.device)
@@ -167,8 +200,12 @@ class FusionDetector:
         import torch
 
         self._ensure_loaded()
-        v, orig = self._load_gray(vis)
-        r, orig_ir = self._load_gray(ir)
+        # The fusion canvas follows the visible frame's aspect ratio, capped to
+        # ``max_side`` on the long edge (unless an explicit ``size`` was given).
+        w0, h0 = self._image_size(vis)
+        self.W, self.H = self._target_size(w0, h0)
+        v, orig = self._load_gray(vis, (self.W, self.H))
+        r, orig_ir = self._load_gray(ir, (self.W, self.H))
         if orig != orig_ir:
             print(f"warning: visible {orig} and infrared {orig_ir} sizes differ; "
                   f"both resized to {self.W}x{self.H}")
@@ -268,8 +305,12 @@ def main(argv=None):
     ap.add_argument("--weights-dir", default=str(HERE / "weights"))
     ap.add_argument("--mulfs-ckpt", default=None)
     ap.add_argument("--det", default=None)
-    ap.add_argument("--width", type=int, default=640)
-    ap.add_argument("--height", type=int, default=512)
+    ap.add_argument("--max-side", type=int, default=640,
+                    help="fusion long-side cap, aspect preserved (default 640)")
+    ap.add_argument("--width", type=int, default=None,
+                    help="force an exact fusion width (with --height); overrides --max-side")
+    ap.add_argument("--height", type=int, default=None,
+                    help="force an exact fusion height (with --width)")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--device", default=None, help="e.g. cuda:0 or cpu")
@@ -277,8 +318,10 @@ def main(argv=None):
     ap.add_argument("--save-fused", action="store_true", help="also save the fused images")
     a = ap.parse_args(argv)
 
-    fd = FusionDetector(a.weights_dir, a.mulfs_ckpt, a.det, (a.width, a.height), a.imgsz,
-                        a.conf, device=a.device, jpeg_roundtrip=not a.no_jpeg)
+    fixed = (a.width, a.height) if a.width and a.height else None
+    fd = FusionDetector(a.weights_dir, a.mulfs_ckpt, a.det, size=fixed, max_side=a.max_side,
+                        imgsz=a.imgsz, conf=a.conf, device=a.device,
+                        jpeg_roundtrip=not a.no_jpeg)
     vis, ir, out = Path(a.vis), Path(a.ir), Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     pairs = ([(p, ir / p.name) for p in sorted(vis.iterdir())

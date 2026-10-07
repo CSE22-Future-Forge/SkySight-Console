@@ -26,6 +26,7 @@ The UI contract is unchanged: consumers get plain :class:`Track` objects.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -104,6 +105,9 @@ class Track:
     missed: int = 0
     confirmed: bool = False
     label: str = "person"
+    #: Monotonic time the track was last reported by a detection (for time-based
+    #: expiry; negative means "not stamped yet").
+    last_seen: float = -1.0
 
     @property
     def width(self):
@@ -168,6 +172,11 @@ class Tracker:
     max_missed:
         Detection passes a track may go unreported before its box is dropped
         from the display.
+    timeout_s:
+        Optional wall-clock limit: drop a track this many seconds after it was
+        last reported by a detection. ``None`` (default) keeps the frame-count
+        rule only. Used by the thermal/fusion tab, where a slideshow briefly
+        spawns stale tracks that should not linger.
     """
 
     def __init__(
@@ -175,6 +184,7 @@ class Tracker:
         engine="bytetrack",
         config=None,
         max_missed=DEFAULT_MAX_MISSED,
+        timeout_s=None,
         frame_shape=(480, 640),
         **_compat,
     ):
@@ -183,6 +193,7 @@ class Tracker:
             BOTSORT_CONFIG if self.engine == "botsort" else BYTETRACK_CONFIG
         )
         self.max_missed = int(max_missed)
+        self.timeout_s = float(timeout_s) if timeout_s else None
         self.frame_shape = tuple(frame_shape)
 
         self._engine = None
@@ -234,9 +245,10 @@ class Tracker:
     def update(self, detections, now=None):
         """Associate ``detections`` with existing tracks; returns the tracks to draw.
 
-        ``now`` is accepted and ignored — the Ultralytics trackers are
-        frame-driven, not clock-driven.
+        ``now`` is a monotonic timestamp used only by the optional
+        ``timeout_s`` expiry; without it the tracker stays purely frame-driven.
         """
+        now = time.monotonic() if now is None else now
         engine = self._ensure_engine()
         detections = list(detections or [])
         rows = np.asarray(engine.update(self._as_boxes(detections)), dtype=float)
@@ -255,6 +267,7 @@ class Tracker:
                     track_id=track_id,
                     box=(float(x1), float(y1), float(x2), float(y2)),
                     confirmed=True,
+                    last_seen=now,
                 )
                 self._tracks[track_id] = track
             else:
@@ -262,6 +275,7 @@ class Tracker:
                 track.age += 1
                 track.hits += 1
                 track.missed = 0
+                track.last_seen = now
             track.score = float(score)
 
             # Attribute source and label from the detection the row came from.
@@ -278,18 +292,30 @@ class Tracker:
             track = self._tracks[track_id]
             track.age += 1
             track.missed += 1
-            if track.missed > self.max_missed:
+            if track.missed > self.max_missed or self._expired(track, now):
                 del self._tracks[track_id]
 
         return [t for t in self._tracks.values() if t.confirmed]
 
+    def _expired(self, track, now):
+        """True when a track has outlived the optional wall-clock timeout."""
+        return (
+            self.timeout_s is not None
+            and track.last_seen >= 0.0
+            and (now - track.last_seen) >= self.timeout_s
+        )
+
     def predict(self, now=None):
-        """The tracks as they stand, unchanged.
+        """The tracks as they stand, unchanged, minus any past their timeout.
 
         A box moves only when a detection moves it, so there is nothing to
         extrapolate on a frame without a new detector result. This exists so the
         pipeline can advance a frame while a slow model is still working.
         """
+        if self.timeout_s is not None:
+            now = time.monotonic() if now is None else now
+            for track_id in [t for t, tr in self._tracks.items() if self._expired(tr, now)]:
+                del self._tracks[track_id]
         return [t for t in self._tracks.values() if t.confirmed]
 
     def snapshot(self):

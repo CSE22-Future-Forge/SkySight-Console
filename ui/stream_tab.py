@@ -86,10 +86,15 @@ class StreamTab(QWidget):
     #: override this to offer more than one model for side-by-side comparison.
     DETECTOR_CHOICES = (("Ultralytics (YOLO26)", "ultralytics", {}),)
 
+    #: Optional wall-clock limit (seconds) before an undetected track is
+    #: dropped. ``None`` keeps the tracker's frame-count rule. The thermal tab
+    #: overrides this so stale tracks from a slideshow clear quickly.
+    TRACKER_TIMEOUT_S = None
+
     def __init__(self, database, parent=None):
         super().__init__(parent)
         self.db = database
-        self.tracker = Tracker()
+        self.tracker = Tracker(timeout_s=self.TRACKER_TIMEOUT_S)
         self.pipeline = detect.DetectionPipeline(self.tracker, max_fps=20.0)
         self._pending_drafts_cache = None
         # Detection frame vs the full-resolution frame crops are taken from.

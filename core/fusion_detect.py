@@ -33,12 +33,13 @@ class FusionModelDetector(BaseDetector):
     default_source = "fusion"
     runs_off_thread = True
 
-    def __init__(self, conf=0.25, device=None, weights_dir=None, size=(640, 512),
-                 imgsz=640, iou=0.7, **_ignored):
+    def __init__(self, conf=0.25, device=None, weights_dir=None, size=None,
+                 max_side=640, imgsz=640, iou=0.7, **_ignored):
         super().__init__(conf, source="fusion")
         self.device = device
         self._weights_dir = weights_dir
-        self._size = tuple(size)
+        self._size = tuple(size) if size else None
+        self._max_side = int(max_side)
         self._imgsz = int(imgsz)
         self._iou = float(iou)
 
@@ -107,6 +108,7 @@ class FusionModelDetector(BaseDetector):
         self._fd = FusionDetector(
             weights_dir=self._weights_dir,
             size=self._size,
+            max_side=self._max_side,
             imgsz=self._imgsz,
             conf=self.conf,
             iou=self._iou,

@@ -40,10 +40,15 @@ class FusionTab(StreamTab):
         (
             "Fusion Model",
             "fusion",
-            {"size": (640, 512), "imgsz": 640},
+            {"max_side": 640, "imgsz": 640},
         ),
         ("YOLO26", "ultralytics", {}),
     )
+
+    #: Clear a track 0.5 s after it stops being detected. The thermal feed is
+    #: often a frame-by-frame slideshow, which briefly spawns stale tracks that
+    #: should not linger. The RGB camera tab keeps the frame-count default.
+    TRACKER_TIMEOUT_S = 0.5
 
     def __init__(self, database, parent=None):
         self._rgb_bgr = None
