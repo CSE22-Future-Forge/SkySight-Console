@@ -189,7 +189,7 @@ class MapView(QWebEngineView):
         self.bridge.victimClicked.connect(self.victimClicked)
         self.bridge.addVictimRequested.connect(self.addVictimRequested)
 
-        self.load(QUrl(base_url.rstrip("/") + "/web/map.html"))
+        self.load(QUrl(base_url.rstrip("/") + "/web/map.html?gui=1"))
 
     def dispose(self) -> None:
         """Delete the page before the view: the page must never outlive QApplication."""

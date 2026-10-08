@@ -13,6 +13,8 @@ Operator flow
    filed to the database with a feature vector.
 4. The database screens new captures against existing records so the same
    person is not filed twice.
+5. Every filed person is handed to the SAR Manifest ground station, which
+   alerts the rescue teams; people it has not accepted yet are retried.
 
 Model weights plug in through the Detector selector. The custom Ultralytics
 model is wired but stays inert until torch + ultralytics are installed.
@@ -22,8 +24,10 @@ from __future__ import annotations
 
 import os
 import sys
+import time
+from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -48,9 +52,15 @@ APP_ROOT = "data"
 
 
 class MainWindow(QMainWindow):
+    # (person_id, result) from the manifest-link worker thread; delivered queued on the GUI thread.
+    personSynced = Signal(str, object)
+    SYNC_RETRY_S = 5.0
+
     def __init__(self, database):
         super().__init__()
         self.db = database
+        self._awaiting_sync: set[str] = set()
+        self._last_sync = 0.0
         self.setWindowTitle(f"{theme.APP_NAME} — {theme.APP_SUBTITLE}")
         self.resize(1480, 940)
         self.setMinimumSize(1120, 720)
@@ -59,7 +69,10 @@ class MainWindow(QMainWindow):
         self.fusion_tab = FusionTab(self.db)
         # Hand-off to the SAR Manifest ground station (docs/ARCHITECTURE.md);
         # settings live in data/manifest_link.json.
-        self.manifest_link = ManifestLink(os.path.join(APP_ROOT, "manifest_link.json"))
+        self.manifest_link = ManifestLink(
+            os.path.join(APP_ROOT, "manifest_link.json"), on_person_result=self.personSynced.emit
+        )
+        self.personSynced.connect(self._on_person_synced)
 
         for tab in (self.camera_tab, self.fusion_tab):
             tab.captureRequested.connect(self.open_review)
@@ -204,8 +217,43 @@ class MainWindow(QMainWindow):
             running = True
         self.status_feed.setText("FEED: LIVE" if running else "FEED: IDLE")
         self.header_dot.set_color(theme.OK if running else theme.TEXT_MUTED)
+        self._sync_people()
         tab.refresh_link_status()
         self._refresh_global_status()
+
+    # ------------------------------------------------------ ground station ---
+    def _sync_people(self, force=False):
+        """Hand every filed person the ground station has not accepted yet to the manifest link."""
+        now = time.monotonic()
+        if not force and now - self._last_sync < self.SYNC_RETRY_S:
+            return
+        self._last_sync = now
+        for person in self.db.unsynced():
+            if person.person_id in self._awaiting_sync:
+                continue
+            image = self.db.load_image(person)
+            if image is None:
+                continue
+            if person.manifest_key is None:
+                self.db.update_manifest(person.person_id, manifest_key=self.manifest_link.new_key())
+            first = person.captures[0] if person.captures else None
+            if self.manifest_link.submit_person(
+                person.person_id, person.manifest_key, image,
+                source=first.source if first else "rgb",
+                score=first.score if first else 0.0,
+                lat=person.lat, lon=person.lon,
+                captured_ms=_epoch_ms(first.captured_at if first else person.created_at),
+            ):
+                self._awaiting_sync.add(person.person_id)
+
+    def _on_person_synced(self, person_id, result):
+        self._awaiting_sync.discard(person_id)
+        fields = {k: result[k] for k in ("lat", "lon") if k in result}
+        if result.get("ok"):
+            fields["victim_id"] = result["victim_id"]
+        if fields and self.db.get(person_id) is not None:
+            self.db.update_manifest(person_id, **fields)
+        self.current_tab().refresh_link_status()
 
     # -------------------------------------------------------------- dialogs ---
     def open_review(self, findings):
@@ -213,6 +261,7 @@ class MainWindow(QMainWindow):
             return
         dialog = ReviewDialog(findings, self.db, self)
         dialog.exec()
+        self._sync_people(force=True)
         self._refresh_global_status()
         self.current_tab().refresh_db_chip()
 
@@ -229,6 +278,13 @@ class MainWindow(QMainWindow):
         self.fusion_tab.shutdown()
         self.manifest_link.close()
         event.accept()
+
+
+def _epoch_ms(iso_text):
+    try:
+        return int(datetime.fromisoformat(iso_text).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return None
 
 
 def build_app(argv=None):

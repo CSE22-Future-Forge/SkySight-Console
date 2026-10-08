@@ -262,11 +262,12 @@ class StreamTab(QWidget):
         card.add(holder)
 
     def _populate_link_card(self, card):
-        """Hand-off of confirmed people to the SAR Manifest ground station."""
-        self.chk_link = QCheckBox("Send confirmed people to SAR Manifest")
+        """Hand-off of people to the SAR Manifest ground station."""
+        self.chk_link = QCheckBox("Also auto-send every confirmed track")
         self.chk_link.setToolTip(
-            "Each confirmed track is posted once to the ground station on this laptop, "
-            "which de-duplicates it and alerts the rescue teams."
+            "People filed with CAPTURE FINDINGS always go to the ground station.\n"
+            "Tick this to also post every confirmed track without review; the "
+            "ground station de-duplicates them and alerts the rescue teams."
         )
         self.chk_link.setEnabled(False)
         self.chk_link.toggled.connect(self._on_link_toggled)
@@ -298,7 +299,7 @@ class StreamTab(QWidget):
             self.chk_link.blockSignals(True)
             self.chk_link.setChecked(link.enabled)
             self.chk_link.blockSignals(False)
-        text, level = link.status()
+        text, level = link.status(people=(self.db.synced_count(), self.db.count()))
         color = {"ok": theme.OK, "warn": theme.WARN}.get(level, theme.TEXT_MUTED)
         self.link_status.setText(text)
         self.link_status.setStyleSheet(f"color: {color};")

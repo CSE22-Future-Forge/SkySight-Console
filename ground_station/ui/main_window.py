@@ -24,6 +24,7 @@ from ground_station.core.services import ServiceError
 from ground_station.ui import theme
 from ground_station.ui.detail_panel import DetailPanel
 from ground_station.ui.manifest_panel import ManifestPanel
+from ground_station.ui.map_tools import MapMissingStrip, describe_map, map_status
 from ground_station.ui.map_view import MapView
 from ground_station.ui.pairing_dialog import PairingDialog
 from ground_station.ui.settings_dialog import SettingsDialog
@@ -123,9 +124,18 @@ class MainWindow(QMainWindow):
         left_lay.setContentsMargins(0, 0, 0, 0)
         left_lay.addWidget(self.manifest_panel)
 
+        self.map_missing = MapMissingStrip(manifest)
+        self.map_missing.buttons.installed.connect(self._map_installed)
+        middle = QWidget()
+        mid_lay = QVBoxLayout(middle)
+        mid_lay.setContentsMargins(0, 0, 0, 0)
+        mid_lay.setSpacing(6)
+        mid_lay.addWidget(self.map_missing)
+        mid_lay.addWidget(self.map, 1)
+
         split = QSplitter(Qt.Horizontal)
         split.addWidget(left)
-        split.addWidget(self.map)
+        split.addWidget(middle)
         split.addWidget(self.side_tabs)
         split.setStretchFactor(1, 1)
         split.setSizes([400, 800, 390])
@@ -161,6 +171,7 @@ class MainWindow(QMainWindow):
 
         self._mark("victims", "teams", "uav", "mission")
         self._first_fit = True
+        self._refresh_map_status()
 
     # ---------------------------------------------------------------- top bar ---
     def _build_top_bar(self) -> QWidget:
@@ -398,8 +409,21 @@ class MainWindow(QMainWindow):
         self._mark("teams")
 
     def _open_settings(self) -> None:
-        if SettingsDialog(self.m, self).exec() == QDialog.Accepted:
+        dlg = SettingsDialog(self.m, self)
+        dlg.mapInstalled.connect(self._map_installed)
+        before = self.m.settings.get("map_file")
+        if dlg.exec() == QDialog.Accepted:
             self._mark("victims", "teams", "mission")
+            if self.m.settings.get("map_file") != before:
+                self._map_installed()
+
+    def _refresh_map_status(self) -> None:
+        self.map_missing.setVisible(not map_status(self.m)[1])
+
+    def _map_installed(self) -> None:
+        self._refresh_map_status()
+        self.map.reload()  # the bridge caches the latest payloads, so markers come straight back
+        self.statusBar().showMessage(describe_map(self.m), 15000)
 
     def closeEvent(self, event) -> None:
         if QMessageBox.question(self, "Close ground station",

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QMessageBox, QVBoxLayout
 
 from ground_station.config import DEFAULTS
+from ground_station.ui.map_tools import MapButtons, describe_map
 
 HELP = {
     "server_port": "HTTP port for phones (restart needed; firewall rule must match)",
@@ -26,6 +28,8 @@ RESTART = {"server_port", "telemetry_source"}
 
 
 class SettingsDialog(QDialog):
+    mapInstalled = Signal()
+
     def __init__(self, manifest, parent=None):
         super().__init__(parent)
         self.m = manifest
@@ -41,6 +45,13 @@ class SettingsDialog(QDialog):
             self.edits[key] = edit
             form.addRow(key, edit)
         lay.addLayout(form)
+        self.map_label = QLabel(describe_map(manifest))
+        self.map_label.setWordWrap(True)
+        map_buttons = MapButtons(manifest, self)
+        map_buttons.installed.connect(self._map_installed)
+        lay.addWidget(QLabel("<b>Offline map</b>"))
+        lay.addWidget(self.map_label)
+        lay.addWidget(map_buttons)
         note = QLabel(f"Data folder: {manifest.paths.root}")
         note.setProperty("role", "muted")
         note.setWordWrap(True)
@@ -49,6 +60,10 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
+
+    def _map_installed(self):
+        self.map_label.setText(describe_map(self.m))
+        self.mapInstalled.emit()
 
     def _save(self):
         changed, restart = [], False

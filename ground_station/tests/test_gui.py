@@ -188,6 +188,10 @@ def test_main_window_builds_and_refreshes(qapp, manifest):
         cached = w.map.bridge._cache["victims"]["points"]["features"]
         assert [f["properties"]["id"] for f in cached] == [vid]
         assert "Demo" not in w.mission_label.text() and "Test mission" in w.mission_label.text()
+        assert not w.map_missing.isHidden()  # no map in a fresh data folder
+        (manifest.paths.maps / "srilanka.pmtiles").write_bytes(b"PMTiles" + bytes(120))
+        w._map_installed()
+        assert w.map_missing.isHidden()
         dispose(w)
     finally:
         srv.stop()

@@ -46,8 +46,10 @@
     el.hidden = !text;
   }
 
+  // Inside the ground station a Qt strip above the map offers Import / Download instead.
+  var inGui = /[?&]gui=1/.test(location.search);
   fetch("/maps/manifest").then(function (r) {
-    if (!r.ok) showBanner("No offline map installed (see tools/build_map.md). Markers still work.");
+    if (!r.ok && !inGui) showBanner("No offline map installed (see tools/build_map.md). Markers still work.");
   }).catch(function () { showBanner("Map server not reachable."); });
 
   function uavIcon() {
