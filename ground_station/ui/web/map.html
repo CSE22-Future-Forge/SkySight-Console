@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SAR Manifest map</title>
+  <link rel="stylesheet" href="lib/maplibre-gl.css">
+  <link rel="stylesheet" href="map.css">
+</head>
+<body>
+  <div id="map"></div>
+  <div id="banner" hidden></div>
+  <div id="coords"></div>
+  <div id="ctx" hidden>
+    <button id="ctx-add" type="button">Add victim here</button>
+    <button id="ctx-copy" type="button">Copy coordinates</button>
+  </div>
+  <!-- qwebchannel.js is injected by the Qt view (ui/map_view.py); everything else is local. -->
+  <script src="lib/maplibre-gl.js"></script>
+  <script src="lib/pmtiles.js"></script>
+  <script src="map.js"></script>
+</body>
+</html>

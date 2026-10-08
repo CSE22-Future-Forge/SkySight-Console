@@ -20,6 +20,7 @@ model is wired but stays inert until torch + ultralytics are installed.
 
 from __future__ import annotations
 
+import os
 import sys
 
 from PySide6.QtCore import Qt
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.database import PersonDatabase
+from core.manifest_link import ManifestLink
 from ui import theme
 from ui.camera_tab import CameraTab
 from ui.database_dialog import DatabaseDialog
@@ -55,10 +57,14 @@ class MainWindow(QMainWindow):
 
         self.camera_tab = CameraTab(self.db)
         self.fusion_tab = FusionTab(self.db)
+        # Hand-off to the SAR Manifest ground station (docs/ARCHITECTURE.md);
+        # settings live in data/manifest_link.json.
+        self.manifest_link = ManifestLink(os.path.join(APP_ROOT, "manifest_link.json"))
 
         for tab in (self.camera_tab, self.fusion_tab):
             tab.captureRequested.connect(self.open_review)
             tab.databaseRequested.connect(self.open_database)
+            tab.set_manifest_link(self.manifest_link)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
@@ -198,6 +204,7 @@ class MainWindow(QMainWindow):
             running = True
         self.status_feed.setText("FEED: LIVE" if running else "FEED: IDLE")
         self.header_dot.set_color(theme.OK if running else theme.TEXT_MUTED)
+        tab.refresh_link_status()
         self._refresh_global_status()
 
     # -------------------------------------------------------------- dialogs ---
@@ -220,6 +227,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.camera_tab.shutdown()
         self.fusion_tab.shutdown()
+        self.manifest_link.close()
         event.accept()
 
 

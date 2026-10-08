@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "SAR Rescue",
+    "slug": "sar-rescue",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "sarrescue",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0f1722",
+    "android": {
+      "package": "lk.ac.mrt.sar.rescue",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0f1722",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26,
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "The camera scans the pairing code shown on the SAR base laptop.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Your position is shared with the SAR base so the coordinator can see your team and the drone does not report you as a victim."
+        }
+      ],
+      "@maplibre/maplibre-react-native",
+      "./plugins/withMapGlyphs",
+      "./plugins/withShortNativePaths"
+    ]
+  }
+}

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -94,6 +95,7 @@ class StreamTab(QWidget):
     def __init__(self, database, parent=None):
         super().__init__(parent)
         self.db = database
+        self.manifest_link = None
         self.tracker = Tracker(timeout_s=self.TRACKER_TIMEOUT_S)
         self.pipeline = detect.DetectionPipeline(self.tracker, max_fps=20.0)
         self._pending_drafts_cache = None
@@ -188,6 +190,10 @@ class StreamTab(QWidget):
         self._populate_action_card(self.action_card)
         lay.addWidget(self.action_card)
 
+        self.link_card = Card("Ground station")
+        self._populate_link_card(self.link_card)
+        lay.addWidget(self.link_card)
+
         lay.addStretch(1)
         return rail
 
@@ -254,6 +260,58 @@ class StreamTab(QWidget):
         holder = QWidget()
         holder.setLayout(row)
         card.add(holder)
+
+    def _populate_link_card(self, card):
+        """Hand-off of confirmed people to the SAR Manifest ground station."""
+        self.chk_link = QCheckBox("Send confirmed people to SAR Manifest")
+        self.chk_link.setToolTip(
+            "Each confirmed track is posted once to the ground station on this laptop, "
+            "which de-duplicates it and alerts the rescue teams."
+        )
+        self.chk_link.setEnabled(False)
+        self.chk_link.toggled.connect(self._on_link_toggled)
+        card.add(self.chk_link)
+        self.link_status = QLabel("Not connected")
+        self.link_status.setWordWrap(True)
+        self.link_status.setProperty("role", "mono")
+        card.add(self.link_status)
+
+    def set_manifest_link(self, link):
+        """Shared ManifestLink (owned by the main window); both tabs post through it."""
+        self.manifest_link = link
+        self.chk_link.blockSignals(True)
+        self.chk_link.setChecked(link.enabled)
+        self.chk_link.blockSignals(False)
+        self.chk_link.setEnabled(True)
+        self.refresh_link_status()
+
+    def _on_link_toggled(self, checked):
+        if self.manifest_link is not None:
+            self.manifest_link.set_enabled(checked)
+            self.refresh_link_status()
+
+    def refresh_link_status(self):
+        link = self.manifest_link
+        if link is None:
+            return
+        if self.chk_link.isChecked() != link.enabled:  # toggled from the other tab
+            self.chk_link.blockSignals(True)
+            self.chk_link.setChecked(link.enabled)
+            self.chk_link.blockSignals(False)
+        text, level = link.status()
+        color = {"ok": theme.OK, "warn": theme.WARN}.get(level, theme.TEXT_MUTED)
+        self.link_status.setText(text)
+        self.link_status.setStyleSheet(f"color: {color};")
+
+    def _offer_to_manifest(self):
+        link = self.manifest_link
+        if link is None or not link.enabled:
+            return
+        image = self._capture_image()
+        if image is None:
+            return
+        # Same crop source and scale as CAPTURE FINDINGS, so the box lands on the person.
+        link.offer(self.current_tracks(), image, self._raw_scale(self._capture_proc, image))
 
     def _populate_detector_card(self, card):
         self.detector_combo = QComboBox()
@@ -577,6 +635,7 @@ class StreamTab(QWidget):
         context = self.pipeline.result_context
         if context is not None:
             self._apply_detection_context(context)
+        self._offer_to_manifest()
 
     def _apply_detection_context(self, context):
         """Default: context is ``(detection_frame, full_resolution_frame)``."""
