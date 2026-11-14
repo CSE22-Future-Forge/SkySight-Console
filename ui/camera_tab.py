@@ -33,18 +33,23 @@ class CameraTab(StreamTab):
     DETECTOR_CHOICES = (
         (
             (
-                "Custom QS-YOLOv8s (SAHI)",
+                "Merlin",
                 "ultralytics",
                 {
                     "weights": detect.CUSTOM_PERSON_WEIGHTS,
                     "sliced": True,
                     "imgsz": 768,
+                    "ov": {"cpu": ("qs_person_int8", "CPU"), "igpu": ("qs_person_int8", "GPU")},
                 },
             ),
-            ("YOLO26", "ultralytics", {}),
+            ("YOLO26", "ultralytics", {
+                "ov": {"cpu": ("yolo26n_e2e", "CPU"), "igpu": ("yolo26n_e2e", "GPU")},
+            }),
         )
         if detect.CUSTOM_PERSON_WEIGHTS.is_file()
-        else (("YOLO26", "ultralytics", {}),)
+        else (("YOLO26", "ultralytics", {
+            "ov": {"cpu": ("yolo26n_e2e", "CPU"), "igpu": ("yolo26n_e2e", "GPU")},
+        }),)
     )
 
     def __init__(self, database, parent=None):

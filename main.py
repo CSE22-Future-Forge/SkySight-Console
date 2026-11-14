@@ -95,6 +95,8 @@ class MainWindow(QMainWindow):
 
         self._build_status_bar()
         self._refresh_global_status()
+        # Start with only the visible (RGB) tab active.
+        self._on_tab_changed(self.tabs.currentIndex())
 
     # -------------------------------------------------------------- chrome ---
     def _wrap(self, tab):
@@ -163,10 +165,18 @@ class MainWindow(QMainWindow):
     def current_tab(self):
         return self.fusion_tab if self.tabs.currentIndex() == 1 else self.camera_tab
 
-    def _on_tab_changed(self, _index):
-        mode = "RGB + Thermal" if self.tabs.currentIndex() == 1 else "RGB"
+    def _on_tab_changed(self, index):
+        # Only the visible tab should be running: pause the other tab's feeds so
+        # both pipelines are not decoding + inferring at once.
+        active = self.fusion_tab if index == 1 else self.camera_tab
+        for tab in (self.camera_tab, self.fusion_tab):
+            if tab is active:
+                tab.resume()
+            else:
+                tab.pause()
+        mode = "RGB + Thermal" if index == 1 else "RGB"
         self.status_mode.setText(f"VIEW: {mode}")
-        self.current_tab()._recompose()
+        active._recompose()
         self._refresh_global_status()
 
     def _refresh_global_status(self):
@@ -197,7 +207,9 @@ class MainWindow(QMainWindow):
             return
         loaded = getattr(detector, "loaded_weights", None)
         if loaded:
-            where = "GPU" if detector.device == 0 else "CPU"
+            dev = getattr(detector, "device", None)
+            is_gpu = dev == 0 or str(dev).upper() in ("GPU", "CUDA", "CUDA:0")
+            where = "GPU" if is_gpu else "CPU"
             self.banner.show_message(
                 f"{loaded} loaded - running on {where}."
             )

@@ -42,7 +42,9 @@ class FusionTab(StreamTab):
             "fusion",
             {"max_side": 640, "imgsz": 640},
         ),
-        ("YOLO26", "ultralytics", {}),
+        ("YOLO26", "ultralytics", {
+            "ov": {"cpu": ("yolo26n_e2e", "CPU"), "igpu": ("yolo26n_e2e", "GPU")},
+        }),
     )
 
     #: Clear a track 0.5 s after it stops being detected. The thermal feed is
@@ -404,6 +406,15 @@ class FusionTab(StreamTab):
             self.pill_thermal.set_state("THERMAL", theme.THERMAL_C)
 
         self.pill_mode.set_state(self.combo_mode.currentText().upper(), theme.FUSION_C)
+
+    def pause(self):
+        """Freeze both fusion feeds while the other tab is active."""
+        self.rgb.pause()
+        self.thermal.pause()
+
+    def resume(self):
+        self.rgb.resume()
+        self.thermal.resume()
 
     def shutdown(self):
         self._render_timer.stop()

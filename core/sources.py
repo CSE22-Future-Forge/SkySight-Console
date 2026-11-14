@@ -85,6 +85,11 @@ class _CaptureThread(QThread):
         # frame rate to how long the UI takes to render.
         self._ready = threading.Event()
         self._ready.set()
+        # Pause gate: set = running. Cleared while another tab is active so the
+        # capture thread stops reading (freezing the feed in place) without
+        # releasing the device or losing the video position.
+        self._pause = threading.Event()
+        self._pause.set()
 
     def run(self):
         self._running = True
@@ -128,6 +133,10 @@ class _CaptureThread(QThread):
         next_t = time.monotonic()
         try:
             while self._running:
+                # Hold here, device open and position kept, while paused.
+                self._pause.wait()
+                if not self._running:
+                    break
                 ok, frame = cap.read()
                 if not ok or frame is None:
                     if is_video:
@@ -185,6 +194,13 @@ class _CaptureThread(QThread):
         """Called by the UI once it has finished processing a frame."""
         self._ready.set()
 
+    def pause(self):
+        """Stop reading frames; the capture stays open at its current position."""
+        self._pause.clear()
+
+    def resume(self):
+        self._pause.set()
+
     @staticmethod
     def _limit_video_resolution(frame):
         """Downscale a video frame that exceeds the configured maximum size."""
@@ -197,7 +213,8 @@ class _CaptureThread(QThread):
 
     def stop(self):
         self._running = False
-        # Clear the way for anything waiting on the backpressure flag.
+        # Clear the way for anything waiting on the backpressure or pause gates.
+        self._pause.set()
         self._ready.set()
 
     def _release(self):
@@ -249,6 +266,15 @@ class StreamManager(QObject):
         thread.ended.connect(self._on_ended)
         self._thread = thread
         thread.start()
+
+    def pause(self):
+        """Freeze the feed without closing it (used when its tab is hidden)."""
+        if self._thread is not None:
+            self._thread.pause()
+
+    def resume(self):
+        if self._thread is not None:
+            self._thread.resume()
 
     def close(self):
         thread = self._thread

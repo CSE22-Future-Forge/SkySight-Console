@@ -230,8 +230,8 @@ def _has_ultralytics():
 
 
 check(
-    "registry exposes exactly ultralytics + fusion",
-    detect.available_keys() == ["ultralytics", "fusion"],
+    "registry exposes ultralytics + fusion + openvino",
+    detect.available_keys() == ["ultralytics", "fusion", "openvino"],
     f"{detect.available_keys()}",
 )
 for _removed in ("simulated", "motion"):
@@ -257,6 +257,15 @@ check(
 )
 check("fusion does not load its model at construction", _ff._fd is None)
 _ff.close()
+
+_ov = detect.build("openvino", model="qs_person_int8", device="CPU")
+check(
+    "openvino detector available matches openvino + IR files",
+    _ov.available() is True,
+    f"available={_ov.available()}",
+)
+check("openvino detector does not compile at construction", _ov._compiled is None)
+_ov.close()
 
 ultra = detect.build("ultralytics")
 ultra_ok = ultra.available()

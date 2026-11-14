@@ -4,6 +4,9 @@ numpy>=1.24.0
 ultralytics>=8.4.0
 pillow>=9.0.0
 
+# CPU / Intel iGPU compute backend (IR models live in model/openvino/).
+openvino>=2024.0
+
 # ByteTrack's assignment solver. ultralytics pulls this in by itself the first
 # time a tracker runs, which is slow and surprising at runtime, so it is pinned
 # here instead.

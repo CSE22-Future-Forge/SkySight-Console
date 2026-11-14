@@ -85,7 +85,20 @@ class StreamTab(QWidget):
 
     #: Dropdown entries as ``(label, registry_key, kwargs)``. Subclasses
     #: override this to offer more than one model for side-by-side comparison.
-    DETECTOR_CHOICES = (("Ultralytics (YOLO26)", "ultralytics", {}),)
+    #: A kwargs key ``ov`` maps a compute backend to an OpenVINO IR model so the
+    #: same entry can run on CPU / Intel iGPU; entries without it fall back to
+    #: the torch detector when a non-GPU backend is selected.
+    DETECTOR_CHOICES = (("Ultralytics (YOLO26)", "ultralytics", {
+        "ov": {"cpu": ("yolo26n_e2e", "CPU"), "igpu": ("yolo26n_e2e", "GPU")},
+    }),)
+
+    #: Compute backends offered in the rail. ``gpu`` keeps the torch/CUDA path;
+    #: ``cpu`` and ``igpu`` run the OpenVINO INT8 IR models.
+    COMPUTE_CHOICES = (
+        ("NVIDIA GPU", "gpu"),
+        ("CPU (OpenVINO INT8)", "cpu"),
+        ("Intel iGPU (OpenVINO INT8)", "igpu"),
+    )
 
     #: Optional wall-clock limit (seconds) before an undetected track is
     #: dropped. ``None`` keeps the tracker's frame-count rule. The thermal tab
@@ -96,6 +109,7 @@ class StreamTab(QWidget):
         super().__init__(parent)
         self.db = database
         self.manifest_link = None
+        self._compute = "gpu"
         self.tracker = Tracker(timeout_s=self.TRACKER_TIMEOUT_S)
         self.pipeline = detect.DetectionPipeline(self.tracker, max_fps=20.0)
         self._pending_drafts_cache = None
@@ -332,6 +346,17 @@ class StreamTab(QWidget):
         self.detector_combo.currentIndexChanged.connect(self._on_detector_changed)
         card.add(labeled_row("Model", self.detector_combo))
 
+        self.compute_combo = QComboBox()
+        for label, key in self.COMPUTE_CHOICES:
+            self.compute_combo.addItem(label, key)
+        self.compute_combo.setCurrentIndex(0)
+        self.compute_combo.setToolTip(
+            "Execution backend. NVIDIA GPU uses torch/CUDA; CPU and Intel iGPU "
+            "run the exported OpenVINO INT8 models."
+        )
+        self.compute_combo.currentIndexChanged.connect(self._on_compute_changed)
+        card.add(labeled_row("Compute", self.compute_combo))
+
         conf_row = QWidget()
         conf_lay = QHBoxLayout(conf_row)
         conf_lay.setContentsMargins(0, 0, 0, 0)
@@ -476,7 +501,24 @@ class StreamTab(QWidget):
         _label, key, kwargs = entry
         build_kwargs = dict(kwargs)
         build_kwargs["conf"] = self.conf_slider.value() / 100.0
+        ov_map = build_kwargs.pop("ov", None)
+        compute = getattr(self, "_compute", "gpu")
+        if compute in ("cpu", "igpu") and ov_map:
+            model, device = ov_map[compute]
+            return detect.build(
+                "openvino", model=model, device=device,
+                conf=build_kwargs["conf"], source=build_kwargs.get("source"),
+            )
+        if compute in ("cpu", "igpu"):
+            # No OpenVINO IR for this model (e.g. the learned fusion pipeline):
+            # run the torch detector on CPU so the option still works.
+            build_kwargs.setdefault("device", "cpu")
         return detect.build(key, **build_kwargs)
+
+    def _on_compute_changed(self, _index):
+        self._compute = self.compute_combo.currentData() or "gpu"
+        # Rebuild the currently selected model on the new backend.
+        self._on_detector_changed(self.detector_combo.currentIndex())
 
     def _on_detector_changed(self, _index):
         entry = self.detector_combo.currentData()
@@ -536,6 +578,17 @@ class StreamTab(QWidget):
         self._row_cache.clear()
         self._update_track_table([])
         self._update_capture_button()
+
+    def pause(self):
+        """Freeze this tab's feed (called when another tab becomes active)."""
+        stream = getattr(self, "rgb", None)
+        if stream is not None:
+            stream.pause()
+
+    def resume(self):
+        stream = getattr(self, "rgb", None)
+        if stream is not None:
+            stream.resume()
 
     # ------------------------------------------------------- view interaction ---
     def _view_to_frame(self, x, y):

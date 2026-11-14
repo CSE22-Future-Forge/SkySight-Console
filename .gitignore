@@ -17,6 +17,11 @@ data/
 _u_*
 _test_db/
 *.log
+kernel.errors.txt
+
+# Generated OpenVINO/ONNX exports (not loaded at runtime; regenerate with
+# `python -m fusion_model.export_openvino`)
+fusion_model/export/
 
 # Large sample media (exceeds GitHub's 100 MB file limit; use Git LFS if needed)
 *.mp4
