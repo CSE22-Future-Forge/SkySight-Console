@@ -1,0 +1,24 @@
+html, body { margin: 0; height: 100%; background: #f3f0ea; font: 13px "Segoe UI", system-ui, sans-serif; }
+#map { position: absolute; inset: 0; }
+
+#banner {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 2;
+  background: #fff3cd; color: #6b4e00; border: 1px solid #e6c768; border-radius: 6px;
+  padding: 6px 12px; box-shadow: 0 2px 6px rgba(0, 0, 0, .15);
+}
+#coords {
+  position: absolute; right: 8px; bottom: 26px; z-index: 2; pointer-events: none;
+  background: rgba(255, 255, 255, .85); border-radius: 4px; padding: 2px 6px;
+  font: 12px Consolas, monospace; color: #333;
+}
+#ctx {
+  position: absolute; z-index: 3; display: flex; flex-direction: column; min-width: 170px;
+  background: #fff; border: 1px solid #c9c9c9; border-radius: 6px; overflow: hidden;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .2);
+}
+#ctx[hidden], #banner[hidden] { display: none; }
+#ctx button {
+  border: 0; background: none; text-align: left; padding: 8px 12px; font: inherit; cursor: pointer;
+}
+#ctx button:hover { background: #e8f0fe; }
+.maplibregl-popup-content { font: 12px "Segoe UI", system-ui, sans-serif; padding: 8px 10px; }

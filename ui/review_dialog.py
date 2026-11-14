@@ -310,7 +310,8 @@ class ReviewDialog(QDialog):
             "Added to database",
             f"{len(created)} record(s) written:\n"
             + "\n".join(f"  {p.person_id}  ({p.capture_count} capture)" for p in created)
-            + f"\n\nStorage: {self.db.path}",
+            + f"\n\nStorage: {self.db.path}"
+            + "\nThey are being sent to the SAR Manifest ground station.",
         )
         self.accept()
 

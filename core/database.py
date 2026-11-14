@@ -65,6 +65,17 @@ class Person:
     captures: list = field(default_factory=list)
     notes: str = ""
     tags: list = field(default_factory=list)
+    # SAR Manifest ground station hand-off (core/manifest_link.py). ``manifest_key``
+    # is the track_id posted with the person, so a retry merges into one victim;
+    # ``victim_id`` is set once the ground station has accepted them.
+    lat: float | None = None
+    lon: float | None = None
+    manifest_key: int | None = None
+    victim_id: str | None = None
+
+    @property
+    def on_ground_station(self):
+        return bool(self.victim_id)
 
     @property
     def capture_count(self):
@@ -151,6 +162,10 @@ class PersonDatabase:
                     ],
                     notes=entry.get("notes", ""),
                     tags=list(entry.get("tags", [])),
+                    lat=entry.get("lat"),
+                    lon=entry.get("lon"),
+                    manifest_key=entry.get("manifest_key"),
+                    victim_id=entry.get("victim_id"),
                 )
             except (KeyError, TypeError):
                 continue
@@ -182,6 +197,13 @@ class PersonDatabase:
 
     def capture_count(self):
         return sum(p.capture_count for p in self._persons)
+
+    def synced_count(self):
+        return sum(1 for p in self._persons if p.on_ground_station)
+
+    def unsynced(self):
+        """People not yet accepted by the ground station, oldest first."""
+        return [p for p in self.all() if not p.on_ground_station]
 
     def next_id(self):
         highest = 0
@@ -247,6 +269,17 @@ class PersonDatabase:
                 captured_at=datetime.now().isoformat(timespec="seconds"),
             )
         )
+        self.save()
+        return person
+
+    def update_manifest(self, person_id, **fields_):
+        """Store hand-off state (lat, lon, manifest_key, victim_id) for one person."""
+        person = self.get(person_id)
+        if person is None:
+            return None
+        for key in ("lat", "lon", "manifest_key", "victim_id"):
+            if key in fields_:
+                setattr(person, key, fields_[key])
         self.save()
         return person
 

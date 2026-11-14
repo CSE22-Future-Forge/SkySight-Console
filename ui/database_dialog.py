@@ -323,10 +323,18 @@ class DatabaseDialog(QDialog):
         if flagged:
             best_text = "FLAGGED AS POSSIBLE DUPLICATE — " + best_text
 
+        if person.on_ground_station:
+            gs_text = "Ground station: sent"
+        else:
+            gs_text = "Ground station: waiting to send"
+        if person.lat is not None and person.lon is not None:
+            gs_text += f"\nLocation: {person.lat:.6f}, {person.lon:.6f}"
+
         self.detail_info.setText(
             f"Filed: {person.first_seen}\n"
             f"Captures: {person.capture_count}\n"
             f"Sources: {', '.join(person.sources) or '--'}\n"
+            f"{gs_text}\n"
             f"{best_text}"
         )
 

@@ -13,6 +13,7 @@ data/
 *_db/
 
 # Scratch / test artifacts
+.pytest_cache/
 _u_*
 _test_db/
 *.log
@@ -29,3 +30,10 @@ _test_db/
 Thumbs.db
 .idea/
 .vscode/
+
+# PyInstaller / installer output
+build/
+dist/
+
+# Offline map archives (built by tools/build_map.sh into %LOCALAPPDATA%/SARManifest/maps)
+*.pmtiles

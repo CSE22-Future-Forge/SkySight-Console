@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["lk.ac.mrt.sar.nativemodule.SarNativeModule"]
+  }
+}
