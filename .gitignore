@@ -11,6 +11,8 @@ __pycache__/
 # Runtime operator data (person database, thumbnails, exports)
 data/
 *_db/
+# ...but not the phone app's data-layer source, which "data/" would otherwise swallow.
+!mobile_app/src/data/
 
 # Scratch / test artifacts
 .pytest_cache/

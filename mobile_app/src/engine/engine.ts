@@ -7,6 +7,12 @@
  *  - Sync tick: flush outbox -> upload GPS buffer -> fetch missing thumbnails.
  *  - Alarms: siren + full-screen intent for new open victims, repeated every
  *    alert_repeat_s until opened; receipts delivered/opened go back to the base.
+ *
+ * Effects (alarms, cancels, infos) are not acted on per envelope. They are merged and
+ * handled once the envelopes that arrived together have all been applied. On a reconnect
+ * the base replays "V-0003 found" and "V-0003 taken by Bravo" back to back; acting on each
+ * one would ring the siren (and pop the alert screen) for a victim another phone already
+ * has. Merged, the cancel wins and nothing rings.
  */
 
 import * as Battery from 'expo-battery';
@@ -21,7 +27,7 @@ import type { CachedVictim, ConnectionStatus, Envelope, LocationPoint, SyncState
 import { SqliteRepo } from '../data/db';
 import type { Repo } from '../data/repo';
 import { store } from '../state/store';
-import { applyEnvelope, type Effects } from './events';
+import { applyEnvelope, type Effects, mergeEffects, noEffects } from './events';
 import { mapFile, styleFile, thumbFile } from './files';
 import { describeRejection, enqueueAction, flushOutbox, type OutboxDeps } from './outbox';
 import { BaseLink } from '../core/ws';
@@ -31,6 +37,12 @@ const SYNC_EVERY_MS = 10_000;
 const OFFLINE_FIX_EVERY_MS = 30_000;
 const LOCATION_BATCH = 200;
 const KEEP_UPLOADED_MS = 24 * 3600_000;
+/** Envelopes arriving within this gap are handled as one batch (a replay arrives as a burst). */
+const EFFECTS_SETTLE_MS = 150;
+/** ...but a steady stream never holds an alarm back longer than this. */
+const EFFECTS_MAX_WAIT_MS = 700;
+/** How long an alarm waits for the victim's thumbnail before it rings without one. */
+const ALARM_THUMB_WAIT_MS = 1500;
 
 class Engine {
   repo: Repo | null = null;
@@ -42,6 +54,11 @@ class Engine {
   private timers: ReturnType<typeof setInterval>[] = [];
   private subs: { remove(): void }[] = [];
   private lastAlarmShown = new Map<string, number>();
+  /** Victims whose alarm says "needs a team again" rather than "new victim". */
+  private reopened = new Set<string>();
+  private pendingFx: Effects = noEffects();
+  private fxTimer: ReturnType<typeof setTimeout> | null = null;
+  private fxSince: number | null = null;
   private lastStoredFix = 0;
   private battery: number | null = null;
   private refreshQueued = false;
@@ -117,6 +134,10 @@ class Engine {
     this.running = false;
     this.link?.stop();
     this.link = null;
+    if (this.fxTimer) clearTimeout(this.fxTimer);
+    this.fxTimer = null;
+    this.fxSince = null;
+    this.pendingFx = noEffects();
     this.timers.forEach(clearInterval);
     this.timers = [];
     this.subs.forEach((s) => s.remove());
@@ -124,15 +145,25 @@ class Engine {
     SarNative.stopService();
   }
 
+  /** Try the base again right away instead of waiting for the backoff. */
+  reconnect() {
+    void SarNative.bindToWifi(8000).catch(() => false).then((b) => store.set({ wifiBound: !!b }));
+    this.link?.kick();
+    void this.syncTick();
+  }
+
   /** Forget this base completely (unpair / revoked). */
   async unpair() {
     await this.stop();
+    // No siren may keep ringing for a base this phone no longer belongs to.
+    for (const v of store.get().victims) SarNative.cancelNotification(v.id);
     await this.repo?.clearAll();
     await SecureStore.deleteItemAsync(TOKEN_KEY);
     SarNative.unbindNetwork();
     this.api = null;
     this.sync = null;
     this.lastAlarmShown.clear();
+    this.reopened.clear();
     store.reset();
   }
 
@@ -173,51 +204,81 @@ class Engine {
   private async onEnvelope(env: Envelope) {
     const fx = await applyEnvelope(this.repo!, env, this.sync!.team_id);
     this.sync!.last_seq = env.seq;
-    await this.handleEffects(fx);
-    if (fx.changed) await this.refresh();
+    this.pendingFx = mergeEffects(this.pendingFx, fx);
+    this.scheduleEffects();
+  }
+
+  /** Handle the merged effects once the burst of envelopes has settled (see the file doc). */
+  private scheduleEffects() {
+    const now = Date.now();
+    this.fxSince ??= now;
+    if (this.fxTimer) clearTimeout(this.fxTimer);
+    const wait = Math.max(0, Math.min(EFFECTS_SETTLE_MS, this.fxSince + EFFECTS_MAX_WAIT_MS - now));
+    this.fxTimer = setTimeout(() => void this.flushEffects(), wait);
+  }
+
+  private async flushEffects() {
+    this.fxTimer = null;
+    await this.link?.idle(); // envelopes already received are applied first
+    if (this.fxTimer) return; // more arrived meanwhile: that timer takes the merged set
+    const fx = this.pendingFx;
+    this.pendingFx = noEffects();
+    this.fxSince = null;
+    try {
+      await this.handleEffects(fx);
+    } finally {
+      if (fx.changed || fx.alarms.length) await this.refresh();
+    }
   }
 
   private async handleEffects(fx: Effects) {
-    for (const id of fx.cancel) {
+    for (const id of new Set(fx.cancel)) {
       SarNative.cancelNotification(id);
       this.lastAlarmShown.delete(id);
-      if (store.get().alertVictimId === id) store.set({ alertVictimId: null });
     }
     for (const info of fx.infos) SarNative.showInfo(info.id, info.title, info.body, info.victimId);
-    for (const id of fx.alarms) {
+    // Re-read each victim: the batch may have taken it, hidden it or answered it since.
+    const ring: CachedVictim[] = [];
+    for (const id of new Set(fx.alarms)) {
       const v = await this.repo!.getVictim(id);
-      if (v && v.status === 'open' && !v.alerted_at) await this.raiseAlarm(v);
+      if (v && v.status === 'open' && !v.alerted_at && !v.local_pending_action) ring.push(v);
     }
+    await Promise.all(ring.map((v) => this.raiseAlarm(v)));
   }
 
   private alarmText(v: CachedVictim): { title: string; body: string } {
     const where = describeFrom(store.get().me, v);
     const conf = v.max_confidence != null ? ` · ${Math.round(v.max_confidence * 100)}% sure` : '';
     return {
-      title: `NEW VICTIM ${v.display_code}`,
+      title: this.reopened.has(v.id) ? `${v.display_code} NEEDS A TEAM AGAIN` : `NEW VICTIM ${v.display_code}`,
       body: `${where ? where.text : 'Position on map'}${conf} · tap to respond`,
     };
   }
 
   private async raiseAlarm(v: CachedVictim) {
-    const thumb = await this.fetchThumb(v, 3000);
-    const { title, body } = this.alarmText(v);
-    SarNative.showAlarm(v.id, title, body, thumb, true);
+    // A victim this phone rang for before was taken by another team and then released.
+    if (await this.repo!.wasAlerted(v.id)) this.reopened.add(v.id);
     const now = Date.now();
-    this.lastAlarmShown.set(v.id, now);
+    // Claim the alarm before any await below, so a repeat can never ring it twice.
     await this.repo!.patchVictim(v.id, { alerted_at: now });
+    this.lastAlarmShown.set(v.id, now);
+    const thumb = await this.fetchThumb(v, ALARM_THUMB_WAIT_MS);
+    const current = await this.repo!.getVictim(v.id);
+    if (!current || current.status !== 'open') return; // taken while the image downloaded
+    const { title, body } = this.alarmText(current);
+    SarNative.showAlarm(v.id, title, body, thumb, true);
     await enqueueAction(this.outboxDeps, 'receipt', v.id, { delivered_at: now });
-    store.set({ alertVictimId: v.id });
     void this.syncTick();
   }
 
-  /** Siren repeats every alert_repeat_s until the alert is opened (9.3). */
+  /** Siren repeats every alert_repeat_s until the alert is opened or answered (9.3). */
   private async alarmTick() {
     if (!this.repo) return;
     const every = (this.sync?.settings.alert_repeat_s ?? 30) * 1000;
     const now = Date.now();
     for (const v of store.get().victims) {
-      if (v.status !== 'open' || !v.alerted_at || v.opened_at) continue;
+      if (v.status !== 'open' || !v.alerted_at || v.opened_at || v.local_pending_action) continue;
+      if (store.get().alertOnScreen === v.id) continue;
       if (now - (this.lastAlarmShown.get(v.id) ?? v.alerted_at) < every) continue;
       const { title, body } = this.alarmText(v);
       SarNative.showAlarm(v.id, title, body, v.thumb_local_path, true);
@@ -303,13 +364,16 @@ class Engine {
     if (v.thumb_local_path) return v.thumb_local_path;
     if (!v.thumb_url || !this.api) return null;
     const file = thumbFile(v.id);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const download = SarNative.downloadFile(this.api.url(v.thumb_url), file.uri, this.api.authHeaders());
-      await Promise.race([download, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs))]);
+      await Promise.race([download, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), timeoutMs); })]);
       await this.repo!.patchVictim(v.id, { thumb_local_path: file.uri });
       return file.uri;
     } catch {
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
