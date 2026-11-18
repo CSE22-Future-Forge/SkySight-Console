@@ -53,6 +53,11 @@ export async function applyEnvelope(repo: Repo, env: Envelope, myTeamId: string)
       } else if (v.status === 'open' && before && before.status !== 'open') {
         fx.infos.push({ id: `reopen-${v.id}`, title: `${v.display_code} is open again`,
                         body: 'Released by the team that had it - no team is on the way.', victimId: v.id });
+      } else if (before?.status === 'open' && v.status === 'ongoing' && v.assigned_team_id === myTeamId
+                 && before.local_pending_action !== 'accept') {
+        // Another phone of this team accepted: this phone stops ringing and is told why.
+        fx.infos.push({ id: `teammate-${v.id}`, title: `Your team is on ${v.display_code}`,
+                        body: 'Accepted from another phone in your team.', victimId: v.id });
       }
       if (v.status !== 'open') fx.cancel.push(v.id);
       fx.changed = true;

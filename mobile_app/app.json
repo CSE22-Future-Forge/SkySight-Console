@@ -52,7 +52,8 @@
       ],
       "@maplibre/maplibre-react-native",
       "./plugins/withMapGlyphs",
-      "./plugins/withShortNativePaths"
+      "./plugins/withShortNativePaths",
+      "expo-font"
     ]
   }
 }

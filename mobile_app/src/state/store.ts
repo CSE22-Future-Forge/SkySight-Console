@@ -32,8 +32,8 @@ export interface AppState {
   settings: PhoneSettings;
   /** Short message for the snackbar (e.g. "V-0003: Bravo already accepted it."). */
   toast: { text: string; at: number } | null;
-  /** Victim whose full-screen alert should be shown. */
-  alertVictimId: string | null;
+  /** Victim whose full-screen alert screen is mounted right now (null = none). */
+  alertOnScreen: string | null;
   mapFile: string | null;
   styleFile: string | null;
 }
@@ -54,7 +54,7 @@ const initial: AppState = {
   compass: null,
   settings: DEFAULT_SETTINGS,
   toast: null,
-  alertVictimId: null,
+  alertOnScreen: null,
   mapFile: null,
   styleFile: null,
 };
@@ -87,4 +87,15 @@ export function useStore<T>(select: (s: AppState) => T): T {
 
 export function useVictim(id: string | undefined): CachedVictim | undefined {
   return useStore((s) => s.victims.find((v) => v.id === id));
+}
+
+/**
+ * Alarms raised on this phone that nobody has looked at yet, oldest first. Derived from the
+ * victims themselves (not a single "current alert" slot), so several victims found at once
+ * are each shown in turn and none is lost or silenced unseen.
+ */
+export function unseenAlerts(victims: CachedVictim[]): CachedVictim[] {
+  return victims
+    .filter((v) => v.status === 'open' && v.alerted_at && !v.opened_at && !v.local_pending_action)
+    .sort((a, b) => (a.alerted_at ?? 0) - (b.alerted_at ?? 0));
 }

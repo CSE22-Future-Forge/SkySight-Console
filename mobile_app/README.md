@@ -40,7 +40,11 @@ npm run typecheck
 
 | Piece | Where |
 | --- | --- |
-| Screens (pairing, map, full-screen alert, victim, rescue report, my jobs) | `src/app/` |
+| Tabs: dashboard, map, jobs, team & settings | `src/app/(tabs)/` |
+| Pairing, full-screen alert, victim detail, rescue report | `src/app/` |
+| Theme tokens and the shared component kit | `src/ui/` |
+| Dashboard numbers, job lists, activity feed (pure, unit-tested) | `src/state/selectors.ts` |
+| Local DB (expo-sqlite) and the in-memory test double | `src/data/` |
 | WebSocket link: replay from `last_seq`, ack, ping/pong, reconnect, revoke | `src/core/ws.ts` |
 | Outbox: optimistic actions sent in order, 409 rollback | `src/engine/outbox.ts` |
 | Applying server events, deciding alarms and cancellations | `src/engine/events.ts` |
@@ -52,6 +56,7 @@ npm run typecheck
 ## Field checklist
 
 - During pairing, allow location, notifications, full-screen alerts and "ignore battery optimisation".
-  Without the battery exemption, Android can cut the connection while the screen is off.
+  Without the battery exemption, Android can cut the connection while the screen is off. The Team
+  tab shows the same checklist later, all green when the phone is ready.
 - Pairing needs the laptop's `srilanka.pmtiles` (the download resumes if interrupted). After that,
   the map, GPS and actions all work in airplane mode with GPS on.
